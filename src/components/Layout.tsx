@@ -19,7 +19,7 @@ export default function Layout() {
   };
 
   const navItems = [
-    { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['ADMIN', 'GESTAO'] },
+    { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['ADMIN', 'GESTAO', 'SOLICITANTE'] },
     { name: 'Fila Operacional', path: '/chamados', icon: ListTodo, roles: ['ADMIN', 'IMPORTACAO', 'GESTAO', 'SOLICITANTE'] },
     { name: 'Criar Chamado', path: '/chamados/novo', icon: PlusCircle, roles: ['ADMIN', 'SOLICITANTE'] },
     { name: 'Usuários', path: '/usuarios', icon: Users, roles: ['ADMIN'] },
