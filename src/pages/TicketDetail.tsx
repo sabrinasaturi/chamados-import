@@ -225,6 +225,7 @@ export default function TicketDetail() {
             </div>
 
             {/* Comments */}
+            {canEdit && (
             <div className="glass-panel p-6 sm:p-8">
                <h3 className="text-[11px] font-bold text-[var(--color-ink-secondary)] uppercase tracking-widest mb-6 flex items-center gap-2">
                   <MessageSquare className="w-3.5 h-3.5" /> Histórico de Interações Formais
@@ -267,6 +268,7 @@ export default function TicketDetail() {
                   </form>
                )}
             </div>
+            )}
          </div>
 
          {/* Sidebar details */}

@@ -256,7 +256,12 @@ app.get("/api/tickets/:id", authenticateToken, async (req: any, res) => {
     const assU = uRows.find((u:any) => u.id === ticket.assignee_id);
 
     const { rows: hRows } = await pool.query('SELECT h.*, u.name as user_name FROM ticket_history h LEFT JOIN users u ON h.user_id = u.id WHERE h.ticket_id = $1 ORDER BY h.timestamp ASC', [id]);
-    const { rows: cRows } = await pool.query('SELECT c.*, u.name as user_name FROM ticket_comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.ticket_id = $1 ORDER BY c.timestamp ASC', [id]);
+    
+    let cRows: any[] = [];
+    if (req.user.role === 'ADMIN' || req.user.role === 'IMPORTACAO') {
+      const result = await pool.query('SELECT c.*, u.name as user_name FROM ticket_comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.ticket_id = $1 ORDER BY c.timestamp ASC', [id]);
+      cRows = result.rows;
+    }
 
     res.json({
       id: ticket.id, ticketNumber: ticket.ticket_number, proposals: ticket.proposals, bank: ticket.bank, importType: ticket.import_type, priority: ticket.priority, observation: ticket.observation, status: ticket.status, requesterId: ticket.requester_id, assigneeId: ticket.assignee_id, createdAt: ticket.created_at, slaDeadline: ticket.sla_deadline, finishedAt: ticket.finished_at,
@@ -269,6 +274,7 @@ app.get("/api/tickets/:id", authenticateToken, async (req: any, res) => {
 });
 
 app.put("/api/tickets/:id", authenticateToken, async (req: any, res) => {
+  if (req.user.role === 'SOLICITANTE') return res.sendStatus(403);
   try {
     const id = parseInt(req.params.id);
     const { status, assigneeId, comment } = req.body;
