@@ -190,10 +190,10 @@ function setupDatabase() {
 
   const statusCount = db.prepare('SELECT COUNT(*) as c FROM statuses').get();
   if (statusCount.c === 0) {
-    db.prepare('INSERT INTO statuses (name, "order", is_final) VALUES ("Aberto", 1, 0), ("Em andamento", 2, 0), ("Finalizado", 3, 1)').run();
-    db.prepare('INSERT INTO priorities (name, sla, sla_unit) VALUES ("Baixa", 24, "horas"), ("Média", 8, "horas"), ("Alta", 4, "horas")').run();
-    db.prepare('INSERT INTO banks (name) VALUES ("Banco do Brasil"), ("Caixa"), ("Itaú"), ("Santander"), ("Bradesco")').run();
-    db.prepare('INSERT INTO import_types (name) VALUES ("CSV Padrão"), ("Planilha Excel"), ("Integração API")').run();
+    db.prepare(`INSERT INTO statuses (name, "order", is_final) VALUES ('Aberto', 1, 0), ('Em andamento', 2, 0), ('Finalizado', 3, 1)`).run();
+    db.prepare(`INSERT INTO priorities (name, sla, sla_unit) VALUES ('Baixa', 24, 'horas'), ('Média', 8, 'horas'), ('Alta', 4, 'horas')`).run();
+    db.prepare(`INSERT INTO banks (name) VALUES ('Banco do Brasil'), ('Caixa'), ('Itaú'), ('Santander'), ('Bradesco')`).run();
+    db.prepare(`INSERT INTO import_types (name) VALUES ('CSV Padrão'), ('Planilha Excel'), ('Integração API')`).run();
   }
 }
 
