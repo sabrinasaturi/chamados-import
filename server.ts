@@ -10,8 +10,10 @@ import multer from "multer";
 import compression from "compression";
 import morgan from "morgan";
 import fs from "fs";
+import { GoogleGenAI } from "@google/genai";
 import Database from "better-sqlite3";
 
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const app = express();
 const PORT = process.env.PORT || 3000;
 const SECRET_KEY = process.env.JWT_SECRET || "importflow-super-secret-c2";
@@ -147,6 +149,7 @@ function setupDatabase() {
     CREATE TABLE IF NOT EXISTS banks (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
+      color TEXT,
       active BOOLEAN DEFAULT 1,
       deleted BOOLEAN DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -155,6 +158,7 @@ function setupDatabase() {
     CREATE TABLE IF NOT EXISTS import_types (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
+      color TEXT,
       active BOOLEAN DEFAULT 1,
       deleted BOOLEAN DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -165,6 +169,7 @@ function setupDatabase() {
       name TEXT NOT NULL,
       sla INTEGER,
       sla_unit TEXT,
+      color TEXT,
       active BOOLEAN DEFAULT 1,
       deleted BOOLEAN DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -175,11 +180,17 @@ function setupDatabase() {
       name TEXT NOT NULL,
       is_final BOOLEAN DEFAULT 0,
       "order" INTEGER,
+      color TEXT,
       active BOOLEAN DEFAULT 1,
       deleted BOOLEAN DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
   `);
+
+  try { db.exec('ALTER TABLE banks ADD COLUMN color TEXT'); } catch(e){}
+  try { db.exec('ALTER TABLE import_types ADD COLUMN color TEXT'); } catch(e){}
+  try { db.exec('ALTER TABLE priorities ADD COLUMN color TEXT'); } catch(e){}
+  try { db.exec('ALTER TABLE statuses ADD COLUMN color TEXT'); } catch(e){}
 
   const usersCount = db.prepare('SELECT COUNT(*) as c FROM users').get();
   if (usersCount.c === 0) {
@@ -295,14 +306,16 @@ app.post("/api/tickets", authenticateToken, (req: any, res) => {
     const firstStatus = statusObj?.name || "Aberto";
 
     const pArr = Array.isArray(proposals) ? proposals : proposals.split(',').map((p:string)=>p.trim()).filter((p:string)=>p);
-    const num = `TKT-${Date.now()}`; 
+    const tempNum = `TEMP-${Date.now()}`;
 
     const result = db.prepare(
       `INSERT INTO tickets (ticket_number, proposals, bank, import_type, priority, observation, status, requester_id, sla_deadline) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(num, JSON.stringify(pArr), bank, importType, priority, observation, firstStatus, req.user.id, slaDeadline);
+    ).run(tempNum, JSON.stringify(pArr), bank, importType, priority, observation, firstStatus, req.user.id, slaDeadline);
     
     const ticketId = result.lastInsertRowid;
+    const finalNum = `IMP-${ticketId}`;
+    db.prepare('UPDATE tickets SET ticket_number = ? WHERE id = ?').run(finalNum, ticketId);
 
     db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(ticketId, "Chamado criado", req.user.id);
     const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
@@ -440,6 +453,40 @@ app.get("/api/dashboard", authenticateToken, (req: any, res) => {
     };
     res.json(stats);
   } catch(e) { res.status(500).send(); }
+});
+
+app.get("/api/analytics/insights", authenticateToken, async (req: any, res) => {
+  if (req.user.role !== 'ADMIN' && req.user.role !== 'GESTAO') return res.sendStatus(403);
+  try {
+    const tickets = db.prepare(`SELECT t.status, t.bank, t.priority, t.import_type, t.created_at, t.finished_at, t.sla_deadline, u.name as assignee FROM tickets t LEFT JOIN users u ON t.assignee_id = u.id WHERE t.deleted = 0`).all();
+    
+    const prompt = `Você é um analista de operações sênior do sistema ImportFlow C2. 
+Aqui estão os chamados do sistema em formato JSON:
+${JSON.stringify(tickets)}
+
+Gere um resumo executivo com insights operacionais, tendências, gargalos e problemas. Responda APENAS em formato JSON com o seguinte schema:
+{
+  "summary": "Resumo geral da saúde da operação.",
+  "insights": [ "Insight 1 sobre bancos", "Insight 2 sobre equipe", etc ],
+  "bottlenecks": [ "Gargalo 1 detectado", etc ]
+}
+Limite a 5 insights e 3 gargalos. Seja direto, profissional e baseie-se estritamente nos dados. Se houver poucos dados, avise no summary.`;
+
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+      config: { responseMimeType: "application/json" }
+    });
+
+    if (response.text) {
+      res.json(JSON.parse(response.text));
+    } else {
+      res.json({ summary: "Não foi possível gerar insights no momento.", insights: [], bottlenecks: [] });
+    }
+  } catch(e) {
+    console.error("[IA Insights Error]", e);
+    res.status(500).send();
+  }
 });
 
 // Admin Users

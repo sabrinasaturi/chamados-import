@@ -11,6 +11,7 @@ import TicketCreate from './pages/TicketCreate';
 import UsersManagement from './pages/UsersManagement';
 import ChangePassword from './pages/ChangePassword';
 import Parametrizations from './pages/Parametrizations';
+import AnalyticsIA from './pages/AnalyticsIA';
 import C2Logo from './components/C2Logo';
 
 const ProtectedRoute = ({ children, requirePasswordReset = false }: { children: React.ReactNode, requirePasswordReset?: boolean }) => {
@@ -46,6 +47,7 @@ export default function App() {
                <Route path="chamados/:id" element={<TicketDetail />} />
                <Route path="usuarios" element={<UsersManagement />} />
                <Route path="parametros" element={<Parametrizations />} />
+               <Route path="ia" element={<AnalyticsIA />} />
             </Route>
           </Routes>
         </BrowserRouter>

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Link, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../lib/AuthContext';
 import { useTheme } from '../lib/ThemeContext';
-import { Activity, LayoutDashboard, ListTodo, PlusCircle, LogOut, Search, Bell, Users, Settings, Moon, Sun, ChevronLeft, ChevronRight, Menu } from 'lucide-react';
+import { Activity, LayoutDashboard, ListTodo, PlusCircle, LogOut, Search, Bell, Users, Settings, Moon, Sun, ChevronLeft, ChevronRight, Menu, BrainCircuit } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import C2Logo from './C2Logo';
 
@@ -20,6 +20,7 @@ export default function Layout() {
 
   const navItems = [
     { name: 'Dashboard', path: '/', icon: LayoutDashboard, roles: ['ADMIN', 'GESTAO', 'SOLICITANTE'] },
+    { name: 'Análise Inteligente', path: '/ia', icon: BrainCircuit, roles: ['ADMIN', 'GESTAO'] },
     { name: 'Fila Operacional', path: '/chamados', icon: ListTodo, roles: ['ADMIN', 'IMPORTACAO', 'GESTAO', 'SOLICITANTE'] },
     { name: 'Criar Chamado', path: '/chamados/novo', icon: PlusCircle, roles: ['ADMIN', 'SOLICITANTE'] },
     { name: 'Usuários', path: '/usuarios', icon: Users, roles: ['ADMIN'] },

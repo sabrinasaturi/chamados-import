@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../lib/api';
-import { Clock, Plus, Search, LayoutGrid, List, FileQuestion, Filter, X } from 'lucide-react';
+import { Clock, Plus, Search, LayoutGrid, List, FileQuestion, Filter, X, Download } from 'lucide-react';
 import { format, isPast, isBefore } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -46,6 +46,34 @@ export default function TicketsList() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const exportToCsv = () => {
+    const headers = ['ID', 'Propostas', 'Banco', 'Tipo', 'Prioridade', 'Status', 'Solicitante', 'Responsável', 'Data Criação', 'Prazo SLA', 'Conclusão'];
+    const csvContent = [
+      headers.join(','),
+      ...filteredTickets.map(t => [
+        t.ticketNumber,
+        `"${t.proposals.join(',')}"`,
+        `"${t.bank}"`,
+        `"${t.importType}"`,
+        `"${t.priority}"`,
+        `"${t.status}"`,
+        `"${t.requester.name}"`,
+        `"${t.assignee?.name || ''}"`,
+        `"${format(new Date(t.createdAt), 'dd/MM/yyyy HH:mm')}"`,
+        `"${format(new Date(t.slaDeadline), 'dd/MM/yyyy HH:mm')}"`,
+        `"${t.finishedAt ? format(new Date(t.finishedAt), 'dd/MM/yyyy HH:mm') : ''}"`
+      ].join(','))
+    ].join('\n');
+
+    const blob = new Blob(["\uFEFF"+csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `C2_Chamados_${format(new Date(), 'yyyy-MM-dd_HH-mm')}.csv`;
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const getPriorityBadge = (p: string) => {
@@ -134,13 +162,23 @@ export default function TicketsList() {
                 />
              </div>
              
-             <button
-               onClick={() => setShowFilters(!showFilters)}
-               className={`p-2.5 rounded-lg border flex items-center gap-2 text-sm font-semibold transition-all shadow-sm ${showFilters || hasActiveFilters ? 'bg-[var(--color-brand-wine)]/10 border-[var(--color-brand-wine)]/30 text-[var(--color-brand-wine)]' : 'bg-[var(--color-bg-card)] border-[var(--color-border)] text-[var(--color-ink-secondary)] hover:text-[var(--color-ink-primary)]'}`}
-             >
-               <Filter className="w-4 h-4" />
-               <span className="hidden sm:inline">Filtros {hasActiveFilters && <span className="ml-1 bg-[var(--color-brand-wine)] text-white text-[10px] px-1.5 py-0.5 rounded-full">{filterPriority.length + filterBank.length + filterStatus.length + filterAssignee.length}</span>}</span>
-             </button>
+             <div className="flex items-center gap-2">
+                 <button
+                   onClick={() => setShowFilters(!showFilters)}
+                   className={`p-2.5 rounded-lg border flex items-center gap-2 text-sm font-semibold transition-all shadow-sm ${showFilters || hasActiveFilters ? 'bg-[var(--color-brand-wine)]/10 border-[var(--color-brand-wine)]/30 text-[var(--color-brand-wine)]' : 'bg-[var(--color-bg-card)] border-[var(--color-border)] text-[var(--color-ink-secondary)] hover:text-[var(--color-ink-primary)]'}`}
+                 >
+                   <Filter className="w-4 h-4" />
+                   <span className="hidden sm:inline">Filtros {hasActiveFilters && <span className="ml-1 bg-[var(--color-brand-wine)] text-white text-[10px] px-1.5 py-0.5 rounded-full">{filterPriority.length + filterBank.length + filterStatus.length + filterAssignee.length}</span>}</span>
+                 </button>
+
+                 <button
+                   onClick={exportToCsv}
+                   className="p-2.5 rounded-lg border bg-[var(--color-bg-card)] border-[var(--color-border)] text-[var(--color-ink-secondary)] hover:text-[var(--color-ink-primary)] flex items-center gap-2 text-sm font-semibold transition-all shadow-sm"
+                   title="Exportar base filtrada (CSV)"
+                 >
+                   <Download className="w-4 h-4" />
+                 </button>
+             </div>
 
              <div className="flex bg-[var(--color-bg-secondary)] border border-[var(--color-border)] rounded-lg p-1 shadow-inner">
                 <button 
