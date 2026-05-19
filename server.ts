@@ -10,32 +10,19 @@ import multer from "multer";
 import compression from "compression";
 import morgan from "morgan";
 import fs from "fs";
-import { createClient } from "@supabase/supabase-js";
-import pg from "pg";
-
-const { Pool } = pg;
+import Database from "better-sqlite3";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const SECRET_KEY = process.env.JWT_SECRET || "importflow-super-secret-c2";
 const REFRESH_SECRET = process.env.REFRESH_SECRET || "importflow-refresh-secret-c2";
 
-const SUPABASE_URL = process.env.SUPABASE_URL || "";
-const SUPABASE_KEY = process.env.SUPABASE_KEY || "";
-const supabase = SUPABASE_URL && SUPABASE_KEY ? createClient(SUPABASE_URL, SUPABASE_KEY) : null;
-
-// Conexão com o Postgres do Supabase
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
-});
-
 const hashPassword = (password: string) => crypto.createHash("sha256").update(password).digest("hex");
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(compression());
 app.use(cors({ origin: process.env.VITE_APP_URL || '*' }));
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "50mb" }));
 app.use(morgan('combined'));
 
 const authLimiter = rateLimit({
@@ -70,7 +57,6 @@ const authenticateToken = (req: any, res: any, next: any) => {
   });
 };
 
-// --- Utils ---
 const toCamel = (o: any) => {
   let newO: any = {};
   for (let k in o) {
@@ -79,17 +65,148 @@ const toCamel = (o: any) => {
   return newO;
 };
 
-// --- API Routes (Supabase Postgres Integrado) ---
+let db: any;
 
-app.post("/api/login", authLimiter, async (req, res) => {
+function setupDatabase() {
+  db = new Database(path.join(process.cwd(), 'database.sqlite'));
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      email TEXT UNIQUE,
+      login TEXT UNIQUE,
+      role TEXT NOT NULL,
+      sector TEXT,
+      password TEXT NOT NULL,
+      active BOOLEAN DEFAULT 1,
+      force_password_reset BOOLEAN DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      last_login DATETIME
+    );
+
+    CREATE TABLE IF NOT EXISTS login_logs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      name TEXT,
+      ip TEXT,
+      user_agent TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS tickets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticket_number TEXT UNIQUE NOT NULL,
+      proposals TEXT,
+      bank TEXT,
+      import_type TEXT,
+      priority TEXT,
+      observation TEXT,
+      status TEXT,
+      requester_id INTEGER,
+      assignee_id INTEGER,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      sla_deadline DATETIME,
+      finished_at DATETIME,
+      deleted BOOLEAN DEFAULT 0,
+      delete_reason TEXT,
+      deleted_by INTEGER,
+      deleted_at DATETIME
+    );
+
+    CREATE TABLE IF NOT EXISTS ticket_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticket_id INTEGER,
+      action TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      user_id INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS ticket_comments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticket_id INTEGER,
+      text TEXT,
+      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+      user_id INTEGER
+    );
+
+    CREATE TABLE IF NOT EXISTS attachments (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ticket_id INTEGER,
+      original_name TEXT,
+      internal_name TEXT,
+      extension TEXT,
+      type TEXT,
+      size INTEGER,
+      uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      user_id INTEGER,
+      storage_path TEXT,
+      local_path TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS banks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      active BOOLEAN DEFAULT 1,
+      deleted BOOLEAN DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS import_types (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      active BOOLEAN DEFAULT 1,
+      deleted BOOLEAN DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS priorities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      sla INTEGER,
+      sla_unit TEXT,
+      active BOOLEAN DEFAULT 1,
+      deleted BOOLEAN DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS statuses (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      is_final BOOLEAN DEFAULT 0,
+      "order" INTEGER,
+      active BOOLEAN DEFAULT 1,
+      deleted BOOLEAN DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
+  const usersCount = db.prepare('SELECT COUNT(*) as c FROM users').get();
+  if (usersCount.c === 0) {
+    const pwd = hashPassword('admin123');
+    db.prepare('INSERT INTO users (name, email, login, role, sector, password, active, force_password_reset) VALUES (?, ?, ?, ?, ?, ?, 1, 0)')
+      .run('Administrador', 'admin@c2.com', 'admin', 'ADMIN', 'Tecnologia', pwd);
+  }
+
+  const statusCount = db.prepare('SELECT COUNT(*) as c FROM statuses').get();
+  if (statusCount.c === 0) {
+    db.prepare('INSERT INTO statuses (name, "order", is_final) VALUES ("Aberto", 1, 0), ("Em andamento", 2, 0), ("Finalizado", 3, 1)').run();
+    db.prepare('INSERT INTO priorities (name, sla, sla_unit) VALUES ("Baixa", 24, "horas"), ("Média", 8, "horas"), ("Alta", 4, "horas")').run();
+    db.prepare('INSERT INTO banks (name) VALUES ("Banco do Brasil"), ("Caixa"), ("Itaú"), ("Santander"), ("Bradesco")').run();
+    db.prepare('INSERT INTO import_types (name) VALUES ("CSV Padrão"), ("Planilha Excel"), ("Integração API")').run();
+  }
+}
+
+// --- API Routes ---
+
+app.post("/api/login", authLimiter, (req, res) => {
   try {
     const { email, password } = req.body;
-    const { rows } = await pool.query('SELECT * FROM users WHERE (email = $1 OR login = $1) AND active = true', [email]);
-    const user = rows[0];
+    const user = db.prepare('SELECT * FROM users WHERE (email = ? OR login = ?) AND active = 1').get(email, email);
 
     if (user && user.password === hashPassword(password)) {
-      await pool.query('UPDATE users SET last_login = NOW() WHERE id = $1', [user.id]);
-      await pool.query('INSERT INTO login_logs (user_id, name, ip, user_agent) VALUES ($1, $2, $3, $4)', [user.id, user.name, req.ip, req.headers['user-agent']]);
+      db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(user.id);
+      db.prepare('INSERT INTO login_logs (user_id, name, ip, user_agent) VALUES (?, ?, ?, ?)').run(user.id, user.name, req.ip, req.headers['user-agent']);
       
       const tokenUser = { id: user.id, role: user.role, name: user.name, forcePasswordReset: user.force_password_reset };
       const token = jwt.sign(tokenUser, SECRET_KEY, { expiresIn: '15m' });
@@ -102,18 +219,17 @@ app.post("/api/login", authLimiter, async (req, res) => {
     }
   } catch (e: any) {
     console.error(e);
-    res.status(500).json({ error: "Erro de servidor (Supabase)" });
+    res.status(500).json({ error: "Erro de servidor interno" });
   }
 });
 
-app.post("/api/refresh", async (req, res) => {
+app.post("/api/refresh", (req, res) => {
   const { token } = req.body;
   if (!token || !refreshTokens.includes(token)) return res.sendStatus(401);
-  jwt.verify(token, REFRESH_SECRET, async (err: any, tokenUser: any) => {
+  jwt.verify(token, REFRESH_SECRET, (err: any, tokenUser: any) => {
     if (err) return res.sendStatus(403);
-    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1 AND active = true', [tokenUser.id]);
-    if (rows.length === 0) return res.sendStatus(403);
-    const user = rows[0];
+    const user = db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').get(tokenUser.id);
+    if (!user) return res.sendStatus(403);
     const newToken = jwt.sign({ id: user.id, role: user.role, name: user.name, forcePasswordReset: user.force_password_reset }, SECRET_KEY, { expiresIn: '15m' });
     res.json({ token: newToken });
   });
@@ -124,36 +240,36 @@ app.post("/api/logout", (req, res) => {
   res.sendStatus(204);
 });
 
-app.post("/api/users/change-password", authenticateToken, async (req: any, res) => {
+app.post("/api/users/change-password", authenticateToken, (req: any, res) => {
   const { currentPassword, newPassword } = req.body;
-  const { rows } = await pool.query('SELECT password FROM users WHERE id = $1', [req.user.id]);
-  if (!rows[0] || rows[0].password !== hashPassword(currentPassword)) return res.status(400).json({ error: "Senha atual incorreta." });
+  const user = db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.id);
+  if (!user || user.password !== hashPassword(currentPassword)) return res.status(400).json({ error: "Senha atual incorreta." });
   
-  await pool.query('UPDATE users SET password = $1, force_password_reset = false WHERE id = $2', [hashPassword(newPassword), req.user.id]);
+  db.prepare('UPDATE users SET password = ?, force_password_reset = 0 WHERE id = ?').run(hashPassword(newPassword), req.user.id);
   res.json({ success: true });
 });
 
-app.get("/api/users/me", authenticateToken, async (req: any, res) => {
-  const { rows } = await pool.query('SELECT id, name, role, email, force_password_reset FROM users WHERE id = $1', [req.user.id]);
-  if (rows[0]) res.json(toCamel(rows[0]));
+app.get("/api/users/me", authenticateToken, (req: any, res) => {
+  const user = db.prepare('SELECT id, name, role, email, force_password_reset FROM users WHERE id = ?').get(req.user.id);
+  if (user) res.json(toCamel(user));
   else res.status(404).send();
 });
 
-app.get("/api/users", authenticateToken, async (req: any, res) => {
-  const { rows } = await pool.query('SELECT id, name, role, email FROM users WHERE active = true');
+app.get("/api/users", authenticateToken, (req: any, res) => {
+  const rows = db.prepare('SELECT id, name, role, email FROM users WHERE active = 1').all();
   res.json(rows);
 });
 
 // Tickets
-app.get("/api/tickets", authenticateToken, async (req: any, res) => {
+app.get("/api/tickets", authenticateToken, (req: any, res) => {
   try {
-    let q = 'SELECT t.*, u1.name as requester_name, u2.name as assignee_name FROM tickets t LEFT JOIN users u1 ON t.requester_id = u1.id LEFT JOIN users u2 ON t.assignee_id = u2.id WHERE t.deleted = false';
+    let q = 'SELECT t.*, u1.name as requester_name, u2.name as assignee_name FROM tickets t LEFT JOIN users u1 ON t.requester_id = u1.id LEFT JOIN users u2 ON t.assignee_id = u2.id WHERE t.deleted = 0';
     let params: any[] = [];
     q += ' ORDER BY t.created_at DESC';
-    const { rows } = await pool.query(q, params);
+    const rows = db.prepare(q).all(...params);
     
     res.json(rows.map((r: any) => ({
-      id: r.id, ticketNumber: r.ticket_number, proposals: r.proposals, bank: r.bank, 
+      id: r.id, ticketNumber: r.ticket_number, proposals: r.proposals ? JSON.parse(r.proposals) : [], bank: r.bank, 
       importType: r.import_type, priority: r.priority, observation: r.observation, 
       status: r.status, requesterId: r.requester_id, assigneeId: r.assignee_id,
       createdAt: r.created_at, slaDeadline: r.sla_deadline, finishedAt: r.finished_at,
@@ -163,80 +279,73 @@ app.get("/api/tickets", authenticateToken, async (req: any, res) => {
   } catch (e: any) { console.error(e); res.status(500).send(); }
 });
 
-app.post("/api/tickets", authenticateToken, async (req: any, res) => {
+app.post("/api/tickets", authenticateToken, (req: any, res) => {
   try {
     const { proposals, bank, importType, priority, observation, attachments } = req.body;
     
-    const { rows: priorRows } = await pool.query('SELECT sla, sla_unit FROM priorities WHERE name = $1', [priority]);
-    const priorObj = priorRows[0] || { sla: 4, sla_unit: 'horas' };
+    const priorObj = db.prepare('SELECT sla, sla_unit FROM priorities WHERE name = ?').get(priority) || { sla: 4, sla_unit: 'horas' };
     
     let slaMs = 0;
     if (priorObj.sla_unit === 'minutos') slaMs = priorObj.sla * 60 * 1000;
     else if (priorObj.sla_unit === 'horas') slaMs = priorObj.sla * 60 * 60 * 1000;
     else if (priorObj.sla_unit === 'dias') slaMs = priorObj.sla * 24 * 60 * 60 * 1000;
-    const slaDeadline = new Date(Date.now() + slaMs);
+    const slaDeadline = new Date(Date.now() + slaMs).toISOString();
 
-    const { rows: statusRows } = await pool.query('SELECT name FROM statuses WHERE "order" = 1');
-    const firstStatus = statusRows[0]?.name || "Aberto";
+    const statusObj = db.prepare('SELECT name FROM statuses ORDER BY "order" ASC LIMIT 1').get();
+    const firstStatus = statusObj?.name || "Aberto";
 
     const pArr = Array.isArray(proposals) ? proposals : proposals.split(',').map((p:string)=>p.trim()).filter((p:string)=>p);
     const num = `TKT-${Date.now()}`; 
 
-    const { rows: tRows } = await pool.query(
+    const result = db.prepare(
       `INSERT INTO tickets (ticket_number, proposals, bank, import_type, priority, observation, status, requester_id, sla_deadline) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [num, JSON.stringify(pArr), bank, importType, priority, observation, firstStatus, req.user.id, slaDeadline]
-    );
-    const ticket = tRows[0];
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(num, JSON.stringify(pArr), bank, importType, priority, observation, firstStatus, req.user.id, slaDeadline);
+    
+    const ticketId = result.lastInsertRowid;
 
-    await pool.query('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES ($1, $2, $3)', [ticket.id, "Chamado criado", req.user.id]);
+    db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(ticketId, "Chamado criado", req.user.id);
+    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
 
     if (attachments && Array.isArray(attachments)) {
       for (let att of attachments) {
         const ext = att.name.split('.').pop()?.toLowerCase();
         const safeName = att.name.replace(/[^a-zA-Z0-9.\-_]/g, '');
         const uniqueInternalName = `att_${Date.now()}_${Math.floor(Math.random()*1000)}_${safeName}`;
-        let supabasePath = null;
         
-        if (supabase) {
-          try {
-             const buffer = Buffer.from(att.data.replace(/^data:.*?;base64,/, ""), "base64");
-             const { data: uploadData } = await supabase.storage.from('attachments').upload(uniqueInternalName, buffer, { contentType: att.type });
-             supabasePath = uploadData?.path;
-          } catch(e) { console.error("[SUPABASE UPLOAD]", e); }
-        }
+        try {
+           const buffer = Buffer.from(att.data.replace(/^data:.*?;base64,/, ""), "base64");
+           const localPath = path.join(uploadDir, uniqueInternalName);
+           fs.writeFileSync(localPath, buffer);
 
-        await pool.query(
-          `INSERT INTO attachments (ticket_id, original_name, internal_name, extension, type, size, user_id, storage_path) 
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-          [ticket.id, att.name, uniqueInternalName, ext, att.type, att.size, req.user.id, (supabasePath || '')]
-        );
-        await pool.query('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES ($1, $2, $3)', [ticket.id, `Anexo adicionado: ${att.name}`, req.user.id]);
+           db.prepare(
+             `INSERT INTO attachments (ticket_id, original_name, internal_name, extension, type, size, user_id, local_path) 
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+           ).run(ticketId, att.name, uniqueInternalName, ext, att.type, att.size, req.user.id, localPath);
+           db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(ticketId, `Anexo adicionado: ${att.name}`, req.user.id);
+        } catch(e) { console.error("[FILE UPLOAD ERROR]", e); }
       }
     }
     res.json({ id: ticket.id, ticketNumber: ticket.ticket_number, createdAt: ticket.created_at, status: ticket.status });
   } catch (e: any) { console.error(e); res.status(500).send(); }
 });
 
-app.get("/api/tickets/:id/attachments", authenticateToken, async (req: any, res) => {
+app.get("/api/tickets/:id/attachments", authenticateToken, (req: any, res) => {
   try {
-    const { rows } = await pool.query('SELECT a.*, u.name as user_name FROM attachments a LEFT JOIN users u ON a.user_id = u.id WHERE a.ticket_id = $1', [req.params.id]);
+    const rows = db.prepare('SELECT a.*, u.name as user_name FROM attachments a LEFT JOIN users u ON a.user_id = u.id WHERE a.ticket_id = ?').all(req.params.id);
     res.json(rows.map((r: any) => ({
       id: r.id, originalName: r.original_name, extension: r.extension, size: r.size, uploadedAt: r.uploaded_at, user: { name: r.user_name }
     })));
   } catch(e) { res.status(500).send(); }
 });
 
-app.get("/api/attachments/:id/download", authenticateToken, async (req: any, res) => {
+app.get("/api/attachments/:id/download", authenticateToken, (req: any, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM attachments WHERE id = $1', [req.params.id]);
-    const att = rows[0];
+    const att = db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id);
     if (!att) return res.sendStatus(404);
     
-    if (att.storage_path && supabase) {
-      const { data, error } = await supabase.storage.from('attachments').download(att.storage_path);
-      if (error || !data) return res.status(500).json({ error: "Erro Supabase Download" });
-      const buffer = Buffer.from(await data.arrayBuffer());
+    if (att.local_path && fs.existsSync(att.local_path)) {
+      const buffer = fs.readFileSync(att.local_path);
       const base64 = buffer.toString('base64');
       return res.json({ data: `data:${att.type};base64,${base64}`, name: att.original_name, type: att.type });
     }
@@ -244,27 +353,25 @@ app.get("/api/attachments/:id/download", authenticateToken, async (req: any, res
   } catch(e) { console.error(e); res.status(500).send(); }
 });
 
-app.get("/api/tickets/:id", authenticateToken, async (req: any, res) => {
+app.get("/api/tickets/:id", authenticateToken, (req: any, res) => {
   try {
     const id = parseInt(req.params.id);
-    const { rows: tRows } = await pool.query('SELECT * FROM tickets WHERE id = $1', [id]);
-    if (tRows.length === 0) return res.sendStatus(404);
-    const ticket = tRows[0];
+    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(id);
+    if (!ticket) return res.sendStatus(404);
 
-    const { rows: uRows } = await pool.query('SELECT id, name FROM users WHERE id IN ($1, $2)', [ticket.requester_id, ticket.assignee_id || -1]);
+    const uRows = db.prepare(`SELECT id, name FROM users WHERE id IN (?, ?)`).all(ticket.requester_id, ticket.assignee_id || -1);
     const reqU = uRows.find((u:any) => u.id === ticket.requester_id);
     const assU = uRows.find((u:any) => u.id === ticket.assignee_id);
 
-    const { rows: hRows } = await pool.query('SELECT h.*, u.name as user_name FROM ticket_history h LEFT JOIN users u ON h.user_id = u.id WHERE h.ticket_id = $1 ORDER BY h.timestamp ASC', [id]);
+    const hRows = db.prepare('SELECT h.*, u.name as user_name FROM ticket_history h LEFT JOIN users u ON h.user_id = u.id WHERE h.ticket_id = ? ORDER BY h.timestamp ASC').all(id);
     
     let cRows: any[] = [];
     if (req.user.role === 'ADMIN' || req.user.role === 'IMPORTACAO') {
-      const result = await pool.query('SELECT c.*, u.name as user_name FROM ticket_comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.ticket_id = $1 ORDER BY c.timestamp ASC', [id]);
-      cRows = result.rows;
+      cRows = db.prepare('SELECT c.*, u.name as user_name FROM ticket_comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.ticket_id = ? ORDER BY c.timestamp ASC').all(id);
     }
 
     res.json({
-      id: ticket.id, ticketNumber: ticket.ticket_number, proposals: ticket.proposals, bank: ticket.bank, importType: ticket.import_type, priority: ticket.priority, observation: ticket.observation, status: ticket.status, requesterId: ticket.requester_id, assigneeId: ticket.assignee_id, createdAt: ticket.created_at, slaDeadline: ticket.sla_deadline, finishedAt: ticket.finished_at,
+      id: ticket.id, ticketNumber: ticket.ticket_number, proposals: ticket.proposals ? JSON.parse(ticket.proposals) : [], bank: ticket.bank, importType: ticket.import_type, priority: ticket.priority, observation: ticket.observation, status: ticket.status, requesterId: ticket.requester_id, assigneeId: ticket.assignee_id, createdAt: ticket.created_at, slaDeadline: ticket.sla_deadline, finishedAt: ticket.finished_at,
       requester: reqU,
       assignee: assU,
       historyDetails: hRows.map((h:any) => ({ id: h.id, action: h.action, timestamp: h.timestamp, user: { name: h.user_name } })),
@@ -273,56 +380,55 @@ app.get("/api/tickets/:id", authenticateToken, async (req: any, res) => {
   } catch(e) { res.status(500).send(); }
 });
 
-app.put("/api/tickets/:id", authenticateToken, async (req: any, res) => {
+app.put("/api/tickets/:id", authenticateToken, (req: any, res) => {
   if (req.user.role === 'SOLICITANTE') return res.sendStatus(403);
   try {
     const id = parseInt(req.params.id);
     const { status, assigneeId, comment } = req.body;
     
-    const { rows: tRows } = await pool.query('SELECT status, assignee_id FROM tickets WHERE id = $1', [id]);
-    if (tRows.length === 0) return res.sendStatus(404);
-    const ticket = tRows[0];
+    const ticket = db.prepare('SELECT status, assignee_id FROM tickets WHERE id = ?').get(id);
+    if (!ticket) return res.sendStatus(404);
 
     if (status && status !== ticket.status) {
-      const { rows: sRows } = await pool.query('SELECT is_final FROM statuses WHERE name = $1', [status]);
-      const isFinal = sRows[0]?.is_final;
-      await pool.query('UPDATE tickets SET status = $1, finished_at = $2 WHERE id = $3', [status, (isFinal ? new Date() : null), id]);
-      await pool.query('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES ($1, $2, $3)', [id, `Status alterado para ${status}`, req.user.id]);
+      const sObj = db.prepare('SELECT is_final FROM statuses WHERE name = ?').get(status);
+      const isFinal = sObj?.is_final;
+      db.prepare('UPDATE tickets SET status = ?, finished_at = ? WHERE id = ?').run(status, (isFinal ? new Date().toISOString() : null), id);
+      db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(id, `Status alterado para ${status}`, req.user.id);
     }
     
     if (assigneeId !== undefined && assigneeId !== ticket.assignee_id) {
-       await pool.query('UPDATE tickets SET assignee_id = $1 WHERE id = $2', [assigneeId, id]);
-       await pool.query('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES ($1, $2, $3)', [id, assigneeId ? `Atribuído` : `Desatribuído`, req.user.id]);
+       db.prepare('UPDATE tickets SET assignee_id = ? WHERE id = ?').run(assigneeId, id);
+       db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(id, assigneeId ? `Atribuído` : `Desatribuído`, req.user.id);
     }
     
     if (comment) {
-       await pool.query('INSERT INTO ticket_comments (ticket_id, text, user_id) VALUES ($1, $2, $3)', [id, comment, req.user.id]);
+       db.prepare('INSERT INTO ticket_comments (ticket_id, text, user_id) VALUES (?, ?, ?)').run(id, comment, req.user.id);
     }
     res.json({ success: true });
-  } catch(e) { res.status(500).send(); }
+  } catch(e) { console.error(e); res.status(500).send(); }
 });
 
-app.delete("/api/tickets/:id", authenticateToken, async (req: any, res) => {
+app.delete("/api/tickets/:id", authenticateToken, (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
     const id = parseInt(req.params.id);
     const { reason } = req.body;
-    await pool.query('UPDATE tickets SET deleted = true, status = $1, deleted_at = NOW(), deleted_by = $2, delete_reason = $3 WHERE id = $4', ['Excluído', req.user.id, reason, id]);
-    await pool.query('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES ($1, $2, $3)', [id, `Chamado excluído. Motivo: ${reason}`, req.user.id]);
+    db.prepare('UPDATE tickets SET deleted = 1, status = ?, deleted_at = CURRENT_TIMESTAMP, deleted_by = ?, delete_reason = ? WHERE id = ?').run('Excluído', req.user.id, reason, id);
+    db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(id, `Chamado excluído. Motivo: ${reason}`, req.user.id);
     res.json({ success: true });
   } catch(e) { res.status(500).send(); }
 });
 
 // Dashboard
-app.get("/api/dashboard", authenticateToken, async (req: any, res) => {
+app.get("/api/dashboard", authenticateToken, (req: any, res) => {
   try {
     const { startDate, endDate } = req.query;
-    let baseWhere = 'deleted = false';
+    let baseWhere = 'deleted = 0';
     let params: any[] = [];
-    if (startDate) { params.push(startDate); baseWhere += ` AND created_at >= $1`; }
-    if (endDate) { params.push(`${endDate} 23:59:59`); baseWhere += ` AND created_at <= $${params.length}`; }
+    if (startDate) { params.push(startDate); baseWhere += ` AND created_at >= ?`; }
+    if (endDate) { params.push(`${endDate} 23:59:59`); baseWhere += ` AND created_at <= ?`; }
     
-    const { rows } = await pool.query(`SELECT status, bank, priority, sla_deadline FROM tickets WHERE ${baseWhere}`, params);
+    const rows = db.prepare(`SELECT status, bank, priority, sla_deadline FROM tickets WHERE ${baseWhere}`).all(...params);
     
     const stats = {
        abertos: rows.filter((t:any) => t.status === 'Aberto').length,
@@ -337,106 +443,110 @@ app.get("/api/dashboard", authenticateToken, async (req: any, res) => {
 });
 
 // Admin Users
-app.get("/api/admin/users", authenticateToken, async (req: any, res) => {
+app.get("/api/admin/users", authenticateToken, (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
-    const { rows } = await pool.query('SELECT id, name, login, email, role, sector, active, created_at as "createdAt", last_login as "lastLogin", force_password_reset as "forcePasswordReset" FROM users');
-    res.json(rows);
+    const rows = db.prepare('SELECT id, name, login, email, role, sector, active, created_at as "createdAt", last_login as "lastLogin", force_password_reset as "forcePasswordReset" FROM users').all();
+    res.json(rows.map((row: any) => ({ ...row, active: Boolean(row.active), forcePasswordReset: Boolean(row.forcePasswordReset) })));
   } catch(e) { res.status(500).send(); }
 });
 
-app.post("/api/admin/users", authenticateToken, async (req: any, res) => {
+app.post("/api/admin/users", authenticateToken, (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
     const { name, email, login, role, sector, password } = req.body;
     const pwd = hashPassword(password);
-    const { rows } = await pool.query(
-      `INSERT INTO users (name, email, login, role, sector, password, active, force_password_reset) VALUES ($1, $2, $3, $4, $5, $6, true, true) RETURNING id, name, email, role, sector`,
-      [name, email, login, role, sector, pwd]
-    );
-    res.json(rows[0]);
+    const result = db.prepare(
+      `INSERT INTO users (name, email, login, role, sector, password, active, force_password_reset) VALUES (?, ?, ?, ?, ?, ?, 1, 1)`
+    ).run(name, email, login, role, sector, pwd);
+    const user = db.prepare('SELECT id, name, email, role, sector FROM users WHERE id = ?').get(result.lastInsertRowid);
+    res.json(user);
   } catch(e) { console.error(e); res.status(500).send(); }
 });
 
-app.put("/api/admin/users/:id", authenticateToken, async (req: any, res) => {
+app.put("/api/admin/users/:id", authenticateToken, (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
     const id = parseInt(req.params.id);
     const { name, email, login, role, sector, active, password } = req.body;
     if (password) {
-       await pool.query('UPDATE users SET name=$1, email=$2, login=$3, role=$4, sector=$5, active=$6, password=$7 WHERE id=$8', [name, email, login, role, sector, active, hashPassword(password), id]);
+       db.prepare('UPDATE users SET name=?, email=?, login=?, role=?, sector=?, active=?, password=? WHERE id=?').run(name, email, login, role, sector, active ? 1 : 0, hashPassword(password), id);
     } else {
-       await pool.query('UPDATE users SET name=$1, email=$2, login=$3, role=$4, sector=$5, active=$6 WHERE id=$7', [name, email, login, role, sector, active, id]);
+       db.prepare('UPDATE users SET name=?, email=?, login=?, role=?, sector=?, active=? WHERE id=?').run(name, email, login, role, sector, active ? 1 : 0, id);
     }
     res.json({ success: true });
   } catch(e) { res.status(500).send(); }
 });
 
-app.post("/api/admin/users/:id/reset-password", authenticateToken, async (req: any, res) => {
+app.post("/api/admin/users/:id/reset-password", authenticateToken, (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
     const tempPassword = Math.random().toString(36).slice(-8);
-    await pool.query('UPDATE users SET password = $1, force_password_reset = true WHERE id = $2', [hashPassword(tempPassword), req.params.id]);
+    db.prepare('UPDATE users SET password = ?, force_password_reset = 1 WHERE id = ?').run(hashPassword(tempPassword), req.params.id);
     res.json({ success: true, tempPassword });
   } catch(e) { res.status(500).send(); }
 });
 
-app.get("/api/admin/logs", authenticateToken, async (req: any, res) => {
+app.get("/api/admin/logs", authenticateToken, (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
-    const { rows } = await pool.query('SELECT * FROM login_logs ORDER BY timestamp DESC');
+    const rows = db.prepare('SELECT * FROM login_logs ORDER BY timestamp DESC').all();
     res.json(rows.map(toCamel));
   } catch(e) { res.status(500).send(); }
 });
 
 // External Params
-app.get("/api/params/all", authenticateToken, async (req: any, res) => {
+app.get("/api/params/all", authenticateToken, (req: any, res) => {
   try {
-    const banks = await pool.query('SELECT * FROM banks WHERE deleted = false AND active = true');
-    const impTypes = await pool.query('SELECT * FROM import_types WHERE deleted = false AND active = true');
-    const prios = await pool.query('SELECT * FROM priorities WHERE deleted = false AND active = true ORDER BY sla ASC');
-    const stats = await pool.query('SELECT * FROM statuses WHERE deleted = false AND active = true ORDER BY "order" ASC');
+    const banks = db.prepare('SELECT * FROM banks WHERE deleted = 0 AND active = 1').all();
+    const impTypes = db.prepare('SELECT * FROM import_types WHERE deleted = 0 AND active = 1').all();
+    const prios = db.prepare('SELECT * FROM priorities WHERE deleted = 0 AND active = 1 ORDER BY sla ASC').all();
+    const stats = db.prepare('SELECT * FROM statuses WHERE deleted = 0 AND active = 1 ORDER BY "order" ASC').all();
     
     res.json({
-      banks: banks.rows.map(toCamel),
-      importTypes: impTypes.rows.map(toCamel),
-      priorities: prios.rows.map(toCamel),
-      statuses: stats.rows.map(toCamel)
+      banks: banks.map(toCamel),
+      importTypes: impTypes.map(toCamel),
+      priorities: prios.map(toCamel),
+      statuses: stats.map(toCamel)
     });
   } catch(e) { res.status(500).send(); }
 });
 
 const generateCrud = (pathPrefix: string, tableName: string) => {
-  app.get(`/api/admin/${pathPrefix}`, authenticateToken, async (req: any, res) => {
+  app.get(`/api/admin/${pathPrefix}`, authenticateToken, (req: any, res) => {
     if (req.user.role !== 'ADMIN') return res.sendStatus(403);
-    try { const { rows } = await pool.query(`SELECT * FROM ${tableName} WHERE deleted = false`); res.json(rows.map(toCamel)); } catch(e) { res.status(500).send(); }
+    try { const rows = db.prepare(`SELECT * FROM ${tableName} WHERE deleted = 0`).all(); res.json(rows.map((row: any) => ({ ...toCamel(row), active: Boolean(row.active) }))); } catch(e) { res.status(500).send(); }
   });
-  app.post(`/api/admin/${pathPrefix}`, authenticateToken, async (req: any, res) => {
+  app.post(`/api/admin/${pathPrefix}`, authenticateToken, (req: any, res) => {
     if (req.user.role !== 'ADMIN') return res.sendStatus(403);
     try {
-      const keys = Object.keys(req.body).filter(k => k !== 'id' && k !== 'createdAt' && k !== 'deleted');
+      let keys = Object.keys(req.body).filter(k => k !== 'id' && k !== 'createdAt' && k !== 'deleted');
       const qCols = keys.map(k => `"${k.replace(/[A-Z]/g, m => "_" + m.toLowerCase())}"`).join(', ');
-      const qVals = keys.map((_, i) => `$${i+1}`).join(', ');
-      const vals = keys.map(k => req.body[k]);
-      const { rows } = await pool.query(`INSERT INTO ${tableName} (${qCols}) VALUES (${qVals}) RETURNING *`, vals);
-      res.json(toCamel(rows[0]));
+      const qVals = keys.map((_, i) => `?`).join(', ');
+      const vals = keys.map(k => typeof req.body[k] === 'boolean' ? (req.body[k] ? 1 : 0) : req.body[k]);
+      
+      const result = db.prepare(`INSERT INTO ${tableName} (${qCols}) VALUES (${qVals})`).run(...vals);
+      const newRow = db.prepare(`SELECT * FROM ${tableName} WHERE id = ?`).get(result.lastInsertRowid);
+      res.json({ ...toCamel(newRow), active: Boolean((newRow as any).active) });
     } catch(e) { console.error(e); res.status(500).send(); }
   });
-  app.put(`/api/admin/${pathPrefix}/:id`, authenticateToken, async (req: any, res) => {
+  app.put(`/api/admin/${pathPrefix}/:id`, authenticateToken, (req: any, res) => {
     if (req.user.role !== 'ADMIN') return res.sendStatus(403);
     try {
       const keys = Object.keys(req.body).filter(k => k !== 'id' && k !== 'createdAt' && k !== 'deleted');
-      const qSet = keys.map((k, i) => `"${k.replace(/[A-Z]/g, m => "_" + m.toLowerCase())}" = $${i+1}`).join(', ');
-      const vals = keys.map(k => req.body[k]);
+      const qSet = keys.map((k, i) => `"${k.replace(/[A-Z]/g, m => "_" + m.toLowerCase())}" = ?`).join(', ');
+      const vals = keys.map(k => typeof req.body[k] === 'boolean' ? (req.body[k] ? 1 : 0) : req.body[k]);
       vals.push(req.params.id);
-      const { rows } = await pool.query(`UPDATE ${tableName} SET ${qSet} WHERE id = $${vals.length} RETURNING *`, vals);
-      res.json(toCamel(rows[0]));
+      
+      db.prepare(`UPDATE ${tableName} SET ${qSet} WHERE id = ?`).run(...vals);
+      const updatedRow = db.prepare(`SELECT * FROM ${tableName} WHERE id = ?`).get(req.params.id);
+      res.json({ ...toCamel(updatedRow), active: Boolean((updatedRow as any).active) });
     } catch(e) { console.error(e); res.status(500).send(); }
   });
-  app.delete(`/api/admin/${pathPrefix}/:id`, authenticateToken, async (req: any, res) => {
+  app.delete(`/api/admin/${pathPrefix}/:id`, authenticateToken, (req: any, res) => {
     if (req.user.role !== 'ADMIN') return res.sendStatus(403);
     try {
-      await pool.query(`UPDATE ${tableName} SET deleted = true WHERE id = $1`, [req.params.id]);
+      db.prepare(`UPDATE ${tableName} SET deleted = 1 WHERE id = ?`).run(req.params.id);
       res.json({ success: true });
     } catch(e) { res.status(500).send(); }
   });
@@ -449,6 +559,8 @@ generateCrud('statuses', 'statuses');
 
 // Root Express config
 async function startServer() {
+  setupDatabase();
+
   app.use((err: any, req: any, res: any, next: any) => {
     console.error(`[ERRO CRÍTICO] Rota: ${req.url} - `, err.stack);
     res.status(500).json({ error: "Erro interno no servidor." });
