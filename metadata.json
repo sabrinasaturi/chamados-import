@@ -1,0 +1,8 @@
+{
+  "name": "ImportFlow C2",
+  "description": "Sistema de gestão operacional de chamados de importação de informações de produção e comissão para correspondentes bancários.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

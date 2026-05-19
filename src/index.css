@@ -1,0 +1,198 @@
+@import "tailwindcss";
+
+:root {
+  --color-bg-primary: #f8fafc; /* slate-50 */
+  --color-bg-secondary: #f1f5f9; /* slate-100 */
+  --color-bg-card: #ffffff; /* white */
+  --color-border: #e2e8f0; /* slate-200 */
+  --color-ink-primary: #0f172a; /* slate-900 */
+  --color-ink-secondary: #64748b; /* slate-500 */
+  
+  --color-brand-wine: #671E32; /* Derived from logo */
+  --color-brand-wine-hover: #4E1625;
+  --color-brand-blue: #671E32; /* Mapping brand blue to wine for thematic consistency, but we can also use real blue if needed. Let's stick with the wine */
+  --color-brand-blue-hover: #4E1625;
+  
+  --color-status-urgent: #f59e0b; /* amber-500 */
+  --color-status-critical: #ef4444; /* red-500 */
+  --color-status-normal: #64748b; /* slate-500 */
+  --color-status-success: #10b981; /* emerald-500 */
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+}
+
+.dark {
+  --color-bg-primary: #0f172a; /* slate-900 */
+  --color-bg-secondary: #1e293b; /* slate-800 */
+  --color-bg-card: #1e293b; /* slate-800 */
+  --color-border: #334155; /* slate-700 */
+  --color-ink-primary: #f8fafc; /* slate-50 */
+  --color-ink-secondary: #94a3b8; /* slate-400 */
+  
+  --color-brand-wine: #912a46; 
+  --color-brand-wine-hover: #a63051;
+  --color-brand-blue: #912a46; 
+  --color-brand-blue-hover: #a63051;
+
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.3);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.3), 0 2px 4px -2px rgb(0 0 0 / 0.3);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.4), 0 4px 6px -4px rgb(0 0 0 / 0.4);
+}
+
+@theme {
+  --color-bg-primary: var(--color-bg-primary);
+  --color-bg-secondary: var(--color-bg-secondary);
+  --color-bg-card: var(--color-bg-card);
+  --color-border: var(--color-border);
+  --color-ink-primary: var(--color-ink-primary);
+  --color-ink-secondary: var(--color-ink-secondary);
+  --color-brand-wine: var(--color-brand-wine);
+  --color-brand-wine-hover: var(--color-brand-wine-hover);
+  --color-brand-blue: var(--color-brand-blue);
+  --color-brand-blue-hover: var(--color-brand-blue-hover);
+  --color-status-urgent: var(--color-status-urgent);
+  --color-status-critical: var(--color-status-critical);
+  --color-status-normal: var(--color-status-normal);
+  --color-status-success: var(--color-status-success);
+  
+  --font-sans: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Inter', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background-color: var(--color-bg-primary);
+  color: var(--color-ink-primary);
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-secondary);
+}
+
+/* Tech corporate widget styling */
+.glass-panel {
+  background-color: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: 0.75rem; /* rounded-xl */
+  box-shadow: var(--shadow-sm);
+  transition: background-color 0.3s ease, border-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.data-table th {
+  font-size: 0.75rem;
+  color: var(--color-ink-secondary);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  background-color: var(--color-bg-secondary);
+}
+
+.data-table td {
+  padding: 0.875rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.875rem;
+  color: var(--color-ink-primary);
+}
+
+.data-table tr:hover td {
+  background-color: var(--color-bg-secondary);
+}
+
+.input-field {
+  width: 100%;
+  background-color: var(--color-bg-primary);
+  border: 1px solid var(--color-border);
+  color: var(--color-ink-primary);
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem; /* rounded-lg */
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.3s ease;
+}
+
+.input-field:focus {
+  outline: none;
+  background-color: var(--color-bg-card);
+  border-color: var(--color-brand-blue);
+  box-shadow: 0 0 0 2px rgba(103, 30, 50, 0.2);
+}
+
+.btn-primary {
+  background-color: var(--color-brand-blue);
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem; /* rounded-lg */
+  font-weight: 500;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  box-shadow: var(--shadow-sm);
+}
+.btn-primary:hover {
+  background-color: var(--color-brand-blue-hover);
+  box-shadow: var(--shadow-md);
+}
+
+.btn-secondary {
+  background-color: var(--color-bg-card);
+  color: var(--color-ink-primary);
+  border: 1px solid var(--color-border);
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  font-weight: 500;
+  font-size: 0.875rem;
+  transition: all 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  box-shadow: var(--shadow-sm);
+}
+.btn-secondary:hover {
+  background-color: var(--color-bg-secondary);
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.625rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem; /* 11px */
+  font-weight: 600;
+  letter-spacing: 0.025em;
+  text-transform: uppercase;
+}
+
+.badge-normal { background: var(--color-border); color: var(--color-ink-secondary); }
+.badge-urgent { background: rgba(245, 158, 11, 0.15); color: #d97706; }
+.badge-critical { background: rgba(239, 68, 68, 0.15); color: #dc2626; }
+.badge-success { background: rgba(16, 185, 129, 0.15); color: #059669; }
+
+.dark .badge-urgent { color: #fcd34d; }
+.dark .badge-critical { color: #fca5a5; }
+.dark .badge-success { color: #6ee7b7; }
