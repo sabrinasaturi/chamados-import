@@ -11,7 +11,7 @@ import compression from "compression";
 import morgan from "morgan";
 import fs from "fs";
 import { GoogleGenAI } from "@google/genai";
-import Database from "better-sqlite3";
+import { Pool } from "pg";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const app = express();
@@ -67,12 +67,62 @@ const toCamel = (o: any) => {
   return newO;
 };
 
+
+
+
+let pool: Pool;
 let db: any;
 
-function setupDatabase() {
-  db = new Database(path.join(process.cwd(), 'database.sqlite'));
+async function setupDatabase() {
+  if (!process.env.DATABASE_URL) {
+    console.error("ERRO CRÍTICO: DATABASE_URL não definida! Para usar PostgreSQL, configure a secret DATABASE_URL.");
+  }
+  pool = new Pool({ 
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
+  });
 
-  db.exec(`
+  db = {
+    exec: async (sql: string) => {
+      const pgSql = sql
+        .replace(/INTEGER PRIMARY KEY AUTOINCREMENT/g, 'SERIAL PRIMARY KEY')
+        .replace(/DATETIME/g, 'TIMESTAMP')
+        .replace(/BOOLEAN DEFAULT 1/g, 'BOOLEAN DEFAULT true')
+        .replace(/BOOLEAN DEFAULT 0/g, 'BOOLEAN DEFAULT false');
+      return await pool.query(pgSql);
+    },
+    prepare: (sql: string) => {
+      let pgSql = sql;
+      let i = 1;
+      pgSql = pgSql.replace(/\?/g, () => '$' + (i++));
+      let isInsert = pgSql.trim().toUpperCase().startsWith('INSERT');
+      if (isInsert && !pgSql.toUpperCase().includes('RETURNING')) {
+         pgSql += ' RETURNING id';
+      }
+      return {
+        get: async (...params: any[]) => {
+          let paramArr = params;
+          if(paramArr.length === 1 && Array.isArray(paramArr[0])) paramArr = paramArr[0];
+          const res = await pool.query({ text: pgSql, values: paramArr });
+          return res.rows[0];
+        },
+        all: async (...params: any[]) => {
+          let paramArr = params;
+          if(paramArr.length === 1 && Array.isArray(paramArr[0])) paramArr = paramArr[0];
+          const res = await pool.query({ text: pgSql, values: paramArr });
+          return res.rows;
+        },
+        run: async (...params: any[]) => {
+          let paramArr = params;
+          if(paramArr.length === 1 && Array.isArray(paramArr[0])) paramArr = paramArr[0];
+          const res = await pool.query({ text: pgSql, values: paramArr });
+          return { lastInsertRowid: res.rows[0]?.id };
+        }
+      }
+    }
+  };
+
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
@@ -187,10 +237,10 @@ function setupDatabase() {
     );
   `);
 
-  try { db.exec('ALTER TABLE banks ADD COLUMN color TEXT'); } catch(e){}
-  try { db.exec('ALTER TABLE import_types ADD COLUMN color TEXT'); } catch(e){}
-  try { db.exec('ALTER TABLE priorities ADD COLUMN color TEXT'); } catch(e){}
-  try { db.exec('ALTER TABLE statuses ADD COLUMN color TEXT'); } catch(e){}
+  try { await db.exec('ALTER TABLE banks ADD COLUMN color TEXT'); } catch(e){}
+  try { await db.exec('ALTER TABLE import_types ADD COLUMN color TEXT'); } catch(e){}
+  try { await db.exec('ALTER TABLE priorities ADD COLUMN color TEXT'); } catch(e){}
+  try { await db.exec('ALTER TABLE statuses ADD COLUMN color TEXT'); } catch(e){}
 
   const usersCount = db.prepare('SELECT COUNT(*) as c FROM users').get();
   if (usersCount.c === 0) {
@@ -234,7 +284,7 @@ app.post("/api/login", authLimiter, (req, res) => {
   }
 });
 
-app.post("/api/refresh", (req, res) => {
+app.post("/api/refresh", async (req, res) => {
   const { token } = req.body;
   if (!token || !refreshTokens.includes(token)) return res.sendStatus(401);
   jwt.verify(token, REFRESH_SECRET, (err: any, tokenUser: any) => {
@@ -246,12 +296,12 @@ app.post("/api/refresh", (req, res) => {
   });
 });
 
-app.post("/api/logout", (req, res) => {
+app.post("/api/logout", async (req, res) => {
   refreshTokens = refreshTokens.filter(rt => rt !== req.body.token);
   res.sendStatus(204);
 });
 
-app.post("/api/users/change-password", authenticateToken, (req: any, res) => {
+app.post("/api/users/change-password", authenticateToken, async (req: any, res) => {
   const { currentPassword, newPassword } = req.body;
   const user = db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.id);
   if (!user || user.password !== hashPassword(currentPassword)) return res.status(400).json({ error: "Senha atual incorreta." });
@@ -260,19 +310,19 @@ app.post("/api/users/change-password", authenticateToken, (req: any, res) => {
   res.json({ success: true });
 });
 
-app.get("/api/users/me", authenticateToken, (req: any, res) => {
+app.get("/api/users/me", authenticateToken, async (req: any, res) => {
   const user = db.prepare('SELECT id, name, role, email, force_password_reset FROM users WHERE id = ?').get(req.user.id);
   if (user) res.json(toCamel(user));
   else res.status(404).send();
 });
 
-app.get("/api/users", authenticateToken, (req: any, res) => {
+app.get("/api/users", authenticateToken, async (req: any, res) => {
   const rows = db.prepare('SELECT id, name, role, email FROM users WHERE active = 1').all();
   res.json(rows);
 });
 
 // Tickets
-app.get("/api/tickets", authenticateToken, (req: any, res) => {
+app.get("/api/tickets", authenticateToken, async (req: any, res) => {
   try {
     let q = 'SELECT t.*, u1.name as requester_name, u2.name as assignee_name FROM tickets t LEFT JOIN users u1 ON t.requester_id = u1.id LEFT JOIN users u2 ON t.assignee_id = u2.id WHERE t.deleted = 0';
     let params: any[] = [];
@@ -290,7 +340,7 @@ app.get("/api/tickets", authenticateToken, (req: any, res) => {
   } catch (e: any) { console.error(e); res.status(500).send(); }
 });
 
-app.post("/api/tickets", authenticateToken, (req: any, res) => {
+app.post("/api/tickets", authenticateToken, async (req: any, res) => {
   try {
     const { proposals, bank, importType, priority, observation, attachments } = req.body;
     
@@ -343,7 +393,7 @@ app.post("/api/tickets", authenticateToken, (req: any, res) => {
   } catch (e: any) { console.error(e); res.status(500).send(); }
 });
 
-app.get("/api/tickets/:id/attachments", authenticateToken, (req: any, res) => {
+app.get("/api/tickets/:id/attachments", authenticateToken, async (req: any, res) => {
   try {
     const rows = db.prepare('SELECT a.*, u.name as user_name FROM attachments a LEFT JOIN users u ON a.user_id = u.id WHERE a.ticket_id = ?').all(req.params.id);
     res.json(rows.map((r: any) => ({
@@ -352,7 +402,7 @@ app.get("/api/tickets/:id/attachments", authenticateToken, (req: any, res) => {
   } catch(e) { res.status(500).send(); }
 });
 
-app.get("/api/attachments/:id/download", authenticateToken, (req: any, res) => {
+app.get("/api/attachments/:id/download", authenticateToken, async (req: any, res) => {
   try {
     const att = db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id);
     if (!att) return res.sendStatus(404);
@@ -366,7 +416,7 @@ app.get("/api/attachments/:id/download", authenticateToken, (req: any, res) => {
   } catch(e) { console.error(e); res.status(500).send(); }
 });
 
-app.get("/api/tickets/:id", authenticateToken, (req: any, res) => {
+app.get("/api/tickets/:id", authenticateToken, async (req: any, res) => {
   try {
     const id = parseInt(req.params.id);
     const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(id);
@@ -393,7 +443,7 @@ app.get("/api/tickets/:id", authenticateToken, (req: any, res) => {
   } catch(e) { res.status(500).send(); }
 });
 
-app.put("/api/tickets/:id", authenticateToken, (req: any, res) => {
+app.put("/api/tickets/:id", authenticateToken, async (req: any, res) => {
   if (req.user.role === 'SOLICITANTE') return res.sendStatus(403);
   try {
     const id = parseInt(req.params.id);
@@ -421,7 +471,7 @@ app.put("/api/tickets/:id", authenticateToken, (req: any, res) => {
   } catch(e) { console.error(e); res.status(500).send(); }
 });
 
-app.delete("/api/tickets/:id", authenticateToken, (req: any, res) => {
+app.delete("/api/tickets/:id", authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
     const id = parseInt(req.params.id);
@@ -433,7 +483,7 @@ app.delete("/api/tickets/:id", authenticateToken, (req: any, res) => {
 });
 
 // Dashboard
-app.get("/api/dashboard", authenticateToken, (req: any, res) => {
+app.get("/api/dashboard", authenticateToken, async (req: any, res) => {
   try {
     const { startDate, endDate } = req.query;
     let baseWhere = 'deleted = 0';
@@ -473,24 +523,25 @@ Gere um resumo executivo com insights operacionais, tendências, gargalos e prob
 Limite a 5 insights e 3 gargalos. Seja direto, profissional e baseie-se estritamente nos dados. Se houver poucos dados, avise no summary.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3.5-flash",
       contents: prompt,
       config: { responseMimeType: "application/json" }
     });
 
     if (response.text) {
-      res.json(JSON.parse(response.text));
+      const cleanText = response.text.replace(/```json\n?/g, '').replace(/```/g, '').trim();
+      res.json(JSON.parse(cleanText));
     } else {
       res.json({ summary: "Não foi possível gerar insights no momento.", insights: [], bottlenecks: [] });
     }
   } catch(e) {
     console.error("[IA Insights Error]", e);
-    res.status(500).send();
+    res.status(500).json({ error: String(e) });
   }
 });
 
 // Admin Users
-app.get("/api/admin/users", authenticateToken, (req: any, res) => {
+app.get("/api/admin/users", authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
     const rows = db.prepare('SELECT id, name, login, email, role, sector, active, created_at as "createdAt", last_login as "lastLogin", force_password_reset as "forcePasswordReset" FROM users').all();
@@ -498,7 +549,7 @@ app.get("/api/admin/users", authenticateToken, (req: any, res) => {
   } catch(e) { res.status(500).send(); }
 });
 
-app.post("/api/admin/users", authenticateToken, (req: any, res) => {
+app.post("/api/admin/users", authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
     const { name, email, login, role, sector, password } = req.body;
@@ -511,7 +562,7 @@ app.post("/api/admin/users", authenticateToken, (req: any, res) => {
   } catch(e) { console.error(e); res.status(500).send(); }
 });
 
-app.put("/api/admin/users/:id", authenticateToken, (req: any, res) => {
+app.put("/api/admin/users/:id", authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
     const id = parseInt(req.params.id);
@@ -525,7 +576,7 @@ app.put("/api/admin/users/:id", authenticateToken, (req: any, res) => {
   } catch(e) { res.status(500).send(); }
 });
 
-app.post("/api/admin/users/:id/reset-password", authenticateToken, (req: any, res) => {
+app.post("/api/admin/users/:id/reset-password", authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
     const tempPassword = Math.random().toString(36).slice(-8);
@@ -534,7 +585,7 @@ app.post("/api/admin/users/:id/reset-password", authenticateToken, (req: any, re
   } catch(e) { res.status(500).send(); }
 });
 
-app.get("/api/admin/logs", authenticateToken, (req: any, res) => {
+app.get("/api/admin/logs", authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
     const rows = db.prepare('SELECT * FROM login_logs ORDER BY timestamp DESC').all();
@@ -543,7 +594,7 @@ app.get("/api/admin/logs", authenticateToken, (req: any, res) => {
 });
 
 // External Params
-app.get("/api/params/all", authenticateToken, (req: any, res) => {
+app.get("/api/params/all", authenticateToken, async (req: any, res) => {
   try {
     const banks = db.prepare('SELECT * FROM banks WHERE deleted = 0 AND active = 1').all();
     const impTypes = db.prepare('SELECT * FROM import_types WHERE deleted = 0 AND active = 1').all();
@@ -560,11 +611,11 @@ app.get("/api/params/all", authenticateToken, (req: any, res) => {
 });
 
 const generateCrud = (pathPrefix: string, tableName: string) => {
-  app.get(`/api/admin/${pathPrefix}`, authenticateToken, (req: any, res) => {
+  app.get(`/api/admin/${pathPrefix}`, authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'ADMIN') return res.sendStatus(403);
     try { const rows = db.prepare(`SELECT * FROM ${tableName} WHERE deleted = 0`).all(); res.json(rows.map((row: any) => ({ ...toCamel(row), active: Boolean(row.active) }))); } catch(e) { res.status(500).send(); }
   });
-  app.post(`/api/admin/${pathPrefix}`, authenticateToken, (req: any, res) => {
+  app.post(`/api/admin/${pathPrefix}`, authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'ADMIN') return res.sendStatus(403);
     try {
       let keys = Object.keys(req.body).filter(k => k !== 'id' && k !== 'createdAt' && k !== 'deleted');
@@ -577,7 +628,7 @@ const generateCrud = (pathPrefix: string, tableName: string) => {
       res.json({ ...toCamel(newRow), active: Boolean((newRow as any).active) });
     } catch(e) { console.error(e); res.status(500).send(); }
   });
-  app.put(`/api/admin/${pathPrefix}/:id`, authenticateToken, (req: any, res) => {
+  app.put(`/api/admin/${pathPrefix}/:id`, authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'ADMIN') return res.sendStatus(403);
     try {
       const keys = Object.keys(req.body).filter(k => k !== 'id' && k !== 'createdAt' && k !== 'deleted');
@@ -590,7 +641,7 @@ const generateCrud = (pathPrefix: string, tableName: string) => {
       res.json({ ...toCamel(updatedRow), active: Boolean((updatedRow as any).active) });
     } catch(e) { console.error(e); res.status(500).send(); }
   });
-  app.delete(`/api/admin/${pathPrefix}/:id`, authenticateToken, (req: any, res) => {
+  app.delete(`/api/admin/${pathPrefix}/:id`, authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'ADMIN') return res.sendStatus(403);
     try {
       db.prepare(`UPDATE ${tableName} SET deleted = 1 WHERE id = ?`).run(req.params.id);

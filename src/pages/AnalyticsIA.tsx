@@ -8,9 +8,10 @@ export default function AnalyticsIA() {
   const { user } = useAuth();
   const [data, setData] = useState<{ summary: string, insights: string[], bottlenecks: string[] } | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
   if (user?.role !== 'ADMIN' && user?.role !== 'GESTAO') {
-    return <div className="p-8 text-center text-red-400">Acesso Negado</div>;
+    return <div className="p-8 text-center text-red-500">Acesso Negado</div>;
   }
 
   useEffect(() => {
@@ -20,10 +21,12 @@ export default function AnalyticsIA() {
   const loadInsights = async () => {
     try {
       setLoading(true);
+      setError(false);
       const res = await api.get('/analytics/insights');
       setData(res.data);
     } catch (e) {
       console.error(e);
+      setError(true);
     } finally {
       setLoading(false);
     }
@@ -51,8 +54,17 @@ export default function AnalyticsIA() {
              <Loader2 className="w-10 h-10 animate-spin text-[var(--color-brand-wine)]" />
              <p className="font-bold text-[var(--color-ink-secondary)] animate-pulse">A Inteligência Artificial está analisando as métricas e montando o relatório...</p>
           </div>
-        ) : !data ? (
-          <div className="p-8 text-center font-bold text-[var(--color-ink-secondary)] bg-red-500/10 rounded-2xl border border-red-500/20 text-red-600">Erro ao carregar insights. Tente novamente mais tarde.</div>
+        ) : error || !data ? (
+          <div className="flex flex-col items-center p-14 text-center rounded-2xl bg-white border border-gray-100 shadow-sm gap-4">
+             <AlertTriangle className="w-12 h-12 text-red-500/80" />
+             <div className="space-y-1">
+               <h3 className="font-bold text-lg text-gray-900">Erro na Integração da IA</h3>
+               <p className="text-gray-500 max-w-sm">Houve uma instabilidade ao conectar com o modelo preditivo e montar as métricas da operação.</p>
+             </div>
+             <button onClick={loadInsights} className="btn-secondary py-2 px-4 shadow-sm text-sm mt-2">
+                Tentar novamente
+             </button>
+          </div>
         ) : (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-6">
              
