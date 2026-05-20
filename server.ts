@@ -71,11 +71,15 @@ const toCamel = (o: any) => {
 
 
 let pool: Pool;
-let db: any;
+let db: any = {
+  prepare: () => { throw new Error("DATABASE_URL não configurada no servidor. Conexão real com o banco está desabilitada."); },
+  exec: () => { throw new Error("DATABASE_URL não configurada no servidor. Conexão real com o banco está desabilitada."); }
+};
 
 async function setupDatabase() {
   if (!process.env.DATABASE_URL) {
-    console.error("ERRO CRÍTICO: DATABASE_URL não definida! Para usar PostgreSQL, configure a secret DATABASE_URL.");
+    console.error("ERRO CRÍTICO: DATABASE_URL não definida! Para usar PostgreSQL, configure a secret DATABASE_URL no AI Studio.");
+    return; // Aborta a inicialização real, utiliza db com dummy de erro
   }
   pool = new Pool({ 
     connectionString: process.env.DATABASE_URL,
@@ -242,32 +246,32 @@ async function setupDatabase() {
   try { await db.exec('ALTER TABLE priorities ADD COLUMN color TEXT'); } catch(e){}
   try { await db.exec('ALTER TABLE statuses ADD COLUMN color TEXT'); } catch(e){}
 
-  const usersCount = db.prepare('SELECT COUNT(*) as c FROM users').get();
+  const usersCount = await db.prepare('SELECT COUNT(*) as c FROM users').get();
   if (usersCount.c === 0) {
     const pwd = hashPassword('admin123');
-    db.prepare('INSERT INTO users (name, email, login, role, sector, password, active, force_password_reset) VALUES (?, ?, ?, ?, ?, ?, 1, 0)')
+    await db.prepare('INSERT INTO users (name, email, login, role, sector, password, active, force_password_reset) VALUES (?, ?, ?, ?, ?, ?, true, false)')
       .run('Administrador', 'admin@c2.com', 'admin', 'ADMIN', 'Tecnologia', pwd);
   }
 
-  const statusCount = db.prepare('SELECT COUNT(*) as c FROM statuses').get();
+  const statusCount = await db.prepare('SELECT COUNT(*) as c FROM statuses').get();
   if (statusCount.c === 0) {
-    db.prepare(`INSERT INTO statuses (name, "order", is_final) VALUES ('Aberto', 1, 0), ('Em andamento', 2, 0), ('Finalizado', 3, 1)`).run();
-    db.prepare(`INSERT INTO priorities (name, sla, sla_unit) VALUES ('Baixa', 24, 'horas'), ('Média', 8, 'horas'), ('Alta', 4, 'horas')`).run();
-    db.prepare(`INSERT INTO banks (name) VALUES ('Banco do Brasil'), ('Caixa'), ('Itaú'), ('Santander'), ('Bradesco')`).run();
-    db.prepare(`INSERT INTO import_types (name) VALUES ('CSV Padrão'), ('Planilha Excel'), ('Integração API')`).run();
+    await db.prepare(`INSERT INTO statuses (name, "order", is_final) VALUES ('Aberto', 1, false), ('Em andamento', 2, false), ('Finalizado', 3, true)`).run();
+    await db.prepare(`INSERT INTO priorities (name, sla, sla_unit) VALUES ('Baixa', 24, 'horas'), ('Média', 8, 'horas'), ('Alta', 4, 'horas')`).run();
+    await db.prepare(`INSERT INTO banks (name) VALUES ('Banco do Brasil'), ('Caixa'), ('Itaú'), ('Santander'), ('Bradesco')`).run();
+    await db.prepare(`INSERT INTO import_types (name) VALUES ('CSV Padrão'), ('Planilha Excel'), ('Integração API')`).run();
   }
 }
 
 // --- API Routes ---
 
-app.post("/api/login", authLimiter, (req, res) => {
+app.post("/api/login", authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = db.prepare('SELECT * FROM users WHERE (email = ? OR login = ?) AND active = 1').get(email, email);
+    const user = await db.prepare('SELECT * FROM users WHERE (email = ? OR login = ?) AND active = true').get(email, email);
 
     if (user && user.password === hashPassword(password)) {
-      db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(user.id);
-      db.prepare('INSERT INTO login_logs (user_id, name, ip, user_agent) VALUES (?, ?, ?, ?)').run(user.id, user.name, req.ip, req.headers['user-agent']);
+      await db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(user.id);
+      await db.prepare('INSERT INTO login_logs (user_id, name, ip, user_agent) VALUES (?, ?, ?, ?)').run(user.id, user.name, req.ip, req.headers['user-agent']);
       
       const tokenUser = { id: user.id, role: user.role, name: user.name, forcePasswordReset: user.force_password_reset };
       const token = jwt.sign(tokenUser, SECRET_KEY, { expiresIn: '15m' });
@@ -287,9 +291,9 @@ app.post("/api/login", authLimiter, (req, res) => {
 app.post("/api/refresh", async (req, res) => {
   const { token } = req.body;
   if (!token || !refreshTokens.includes(token)) return res.sendStatus(401);
-  jwt.verify(token, REFRESH_SECRET, (err: any, tokenUser: any) => {
+  jwt.verify(token, REFRESH_SECRET, async (err: any, tokenUser: any) => {
     if (err) return res.sendStatus(403);
-    const user = db.prepare('SELECT * FROM users WHERE id = ? AND active = 1').get(tokenUser.id);
+    const user = await db.prepare('SELECT * FROM users WHERE id = ? AND active = true').get(tokenUser.id);
     if (!user) return res.sendStatus(403);
     const newToken = jwt.sign({ id: user.id, role: user.role, name: user.name, forcePasswordReset: user.force_password_reset }, SECRET_KEY, { expiresIn: '15m' });
     res.json({ token: newToken });
@@ -303,31 +307,31 @@ app.post("/api/logout", async (req, res) => {
 
 app.post("/api/users/change-password", authenticateToken, async (req: any, res) => {
   const { currentPassword, newPassword } = req.body;
-  const user = db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.id);
+  const user = await db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.id);
   if (!user || user.password !== hashPassword(currentPassword)) return res.status(400).json({ error: "Senha atual incorreta." });
   
-  db.prepare('UPDATE users SET password = ?, force_password_reset = 0 WHERE id = ?').run(hashPassword(newPassword), req.user.id);
+  await db.prepare('UPDATE users SET password = ?, force_password_reset = false WHERE id = ?').run(hashPassword(newPassword), req.user.id);
   res.json({ success: true });
 });
 
 app.get("/api/users/me", authenticateToken, async (req: any, res) => {
-  const user = db.prepare('SELECT id, name, role, email, force_password_reset FROM users WHERE id = ?').get(req.user.id);
+  const user = await db.prepare('SELECT id, name, role, email, force_password_reset FROM users WHERE id = ?').get(req.user.id);
   if (user) res.json(toCamel(user));
   else res.status(404).send();
 });
 
 app.get("/api/users", authenticateToken, async (req: any, res) => {
-  const rows = db.prepare('SELECT id, name, role, email FROM users WHERE active = 1').all();
+  const rows = await db.prepare('SELECT id, name, role, email FROM users WHERE active = true').all();
   res.json(rows);
 });
 
 // Tickets
 app.get("/api/tickets", authenticateToken, async (req: any, res) => {
   try {
-    let q = 'SELECT t.*, u1.name as requester_name, u2.name as assignee_name FROM tickets t LEFT JOIN users u1 ON t.requester_id = u1.id LEFT JOIN users u2 ON t.assignee_id = u2.id WHERE t.deleted = 0';
+    let q = 'SELECT t.*, u1.name as requester_name, u2.name as assignee_name FROM tickets t LEFT JOIN users u1 ON t.requester_id = u1.id LEFT JOIN users u2 ON t.assignee_id = u2.id WHERE t.deleted = false';
     let params: any[] = [];
     q += ' ORDER BY t.created_at DESC';
-    const rows = db.prepare(q).all(...params);
+    const rows = await db.prepare(q).all(...params);
     
     res.json(rows.map((r: any) => ({
       id: r.id, ticketNumber: r.ticket_number, proposals: r.proposals ? JSON.parse(r.proposals) : [], bank: r.bank, 
@@ -344,7 +348,7 @@ app.post("/api/tickets", authenticateToken, async (req: any, res) => {
   try {
     const { proposals, bank, importType, priority, observation, attachments } = req.body;
     
-    const priorObj = db.prepare('SELECT sla, sla_unit FROM priorities WHERE name = ?').get(priority) || { sla: 4, sla_unit: 'horas' };
+    const priorObj = await db.prepare('SELECT sla, sla_unit FROM priorities WHERE name = ?').get(priority) || { sla: 4, sla_unit: 'horas' };
     
     let slaMs = 0;
     if (priorObj.sla_unit === 'minutos') slaMs = priorObj.sla * 60 * 1000;
@@ -352,23 +356,23 @@ app.post("/api/tickets", authenticateToken, async (req: any, res) => {
     else if (priorObj.sla_unit === 'dias') slaMs = priorObj.sla * 24 * 60 * 60 * 1000;
     const slaDeadline = new Date(Date.now() + slaMs).toISOString();
 
-    const statusObj = db.prepare('SELECT name FROM statuses ORDER BY "order" ASC LIMIT 1').get();
+    const statusObj = await db.prepare('SELECT name FROM statuses ORDER BY "order" ASC LIMIT 1').get();
     const firstStatus = statusObj?.name || "Aberto";
 
     const pArr = Array.isArray(proposals) ? proposals : proposals.split(',').map((p:string)=>p.trim()).filter((p:string)=>p);
     const tempNum = `TEMP-${Date.now()}`;
 
-    const result = db.prepare(
+    const result = await db.prepare(
       `INSERT INTO tickets (ticket_number, proposals, bank, import_type, priority, observation, status, requester_id, sla_deadline) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(tempNum, JSON.stringify(pArr), bank, importType, priority, observation, firstStatus, req.user.id, slaDeadline);
     
     const ticketId = result.lastInsertRowid;
     const finalNum = `IMP-${ticketId}`;
-    db.prepare('UPDATE tickets SET ticket_number = ? WHERE id = ?').run(finalNum, ticketId);
+    await db.prepare('UPDATE tickets SET ticket_number = ? WHERE id = ?').run(finalNum, ticketId);
 
-    db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(ticketId, "Chamado criado", req.user.id);
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
+    await db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(ticketId, "Chamado criado", req.user.id);
+    const ticket = await db.prepare('SELECT * FROM tickets WHERE id = ?').get(ticketId);
 
     if (attachments && Array.isArray(attachments)) {
       for (let att of attachments) {
@@ -381,11 +385,11 @@ app.post("/api/tickets", authenticateToken, async (req: any, res) => {
            const localPath = path.join(uploadDir, uniqueInternalName);
            fs.writeFileSync(localPath, buffer);
 
-           db.prepare(
+           await db.prepare(
              `INSERT INTO attachments (ticket_id, original_name, internal_name, extension, type, size, user_id, local_path) 
               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
            ).run(ticketId, att.name, uniqueInternalName, ext, att.type, att.size, req.user.id, localPath);
-           db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(ticketId, `Anexo adicionado: ${att.name}`, req.user.id);
+           await db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(ticketId, `Anexo adicionado: ${att.name}`, req.user.id);
         } catch(e) { console.error("[FILE UPLOAD ERROR]", e); }
       }
     }
@@ -395,7 +399,7 @@ app.post("/api/tickets", authenticateToken, async (req: any, res) => {
 
 app.get("/api/tickets/:id/attachments", authenticateToken, async (req: any, res) => {
   try {
-    const rows = db.prepare('SELECT a.*, u.name as user_name FROM attachments a LEFT JOIN users u ON a.user_id = u.id WHERE a.ticket_id = ?').all(req.params.id);
+    const rows = await db.prepare('SELECT a.*, u.name as user_name FROM attachments a LEFT JOIN users u ON a.user_id = u.id WHERE a.ticket_id = ?').all(req.params.id);
     res.json(rows.map((r: any) => ({
       id: r.id, originalName: r.original_name, extension: r.extension, size: r.size, uploadedAt: r.uploaded_at, user: { name: r.user_name }
     })));
@@ -404,7 +408,7 @@ app.get("/api/tickets/:id/attachments", authenticateToken, async (req: any, res)
 
 app.get("/api/attachments/:id/download", authenticateToken, async (req: any, res) => {
   try {
-    const att = db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id);
+    const att = await db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id);
     if (!att) return res.sendStatus(404);
     
     if (att.local_path && fs.existsSync(att.local_path)) {
@@ -419,18 +423,18 @@ app.get("/api/attachments/:id/download", authenticateToken, async (req: any, res
 app.get("/api/tickets/:id", authenticateToken, async (req: any, res) => {
   try {
     const id = parseInt(req.params.id);
-    const ticket = db.prepare('SELECT * FROM tickets WHERE id = ?').get(id);
+    const ticket = await db.prepare('SELECT * FROM tickets WHERE id = ?').get(id);
     if (!ticket) return res.sendStatus(404);
 
-    const uRows = db.prepare(`SELECT id, name FROM users WHERE id IN (?, ?)`).all(ticket.requester_id, ticket.assignee_id || -1);
+    const uRows = await db.prepare(`SELECT id, name FROM users WHERE id IN (?, ?)`).all(ticket.requester_id, ticket.assignee_id || -1);
     const reqU = uRows.find((u:any) => u.id === ticket.requester_id);
     const assU = uRows.find((u:any) => u.id === ticket.assignee_id);
 
-    const hRows = db.prepare('SELECT h.*, u.name as user_name FROM ticket_history h LEFT JOIN users u ON h.user_id = u.id WHERE h.ticket_id = ? ORDER BY h.timestamp ASC').all(id);
+    const hRows = await db.prepare('SELECT h.*, u.name as user_name FROM ticket_history h LEFT JOIN users u ON h.user_id = u.id WHERE h.ticket_id = ? ORDER BY h.timestamp ASC').all(id);
     
     let cRows: any[] = [];
     if (req.user.role === 'ADMIN' || req.user.role === 'IMPORTACAO') {
-      cRows = db.prepare('SELECT c.*, u.name as user_name FROM ticket_comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.ticket_id = ? ORDER BY c.timestamp ASC').all(id);
+      cRows = await db.prepare('SELECT c.*, u.name as user_name FROM ticket_comments c LEFT JOIN users u ON c.user_id = u.id WHERE c.ticket_id = ? ORDER BY c.timestamp ASC').all(id);
     }
 
     res.json({
@@ -449,23 +453,23 @@ app.put("/api/tickets/:id", authenticateToken, async (req: any, res) => {
     const id = parseInt(req.params.id);
     const { status, assigneeId, comment } = req.body;
     
-    const ticket = db.prepare('SELECT status, assignee_id FROM tickets WHERE id = ?').get(id);
+    const ticket = await db.prepare('SELECT status, assignee_id FROM tickets WHERE id = ?').get(id);
     if (!ticket) return res.sendStatus(404);
 
     if (status && status !== ticket.status) {
-      const sObj = db.prepare('SELECT is_final FROM statuses WHERE name = ?').get(status);
+      const sObj = await db.prepare('SELECT is_final FROM statuses WHERE name = ?').get(status);
       const isFinal = sObj?.is_final;
-      db.prepare('UPDATE tickets SET status = ?, finished_at = ? WHERE id = ?').run(status, (isFinal ? new Date().toISOString() : null), id);
-      db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(id, `Status alterado para ${status}`, req.user.id);
+      await db.prepare('UPDATE tickets SET status = ?, finished_at = ? WHERE id = ?').run(status, (isFinal ? new Date().toISOString() : null), id);
+      await db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(id, `Status alterado para ${status}`, req.user.id);
     }
     
     if (assigneeId !== undefined && assigneeId !== ticket.assignee_id) {
-       db.prepare('UPDATE tickets SET assignee_id = ? WHERE id = ?').run(assigneeId, id);
-       db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(id, assigneeId ? `Atribuído` : `Desatribuído`, req.user.id);
+       await db.prepare('UPDATE tickets SET assignee_id = ? WHERE id = ?').run(assigneeId, id);
+       await db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(id, assigneeId ? `Atribuído` : `Desatribuído`, req.user.id);
     }
     
     if (comment) {
-       db.prepare('INSERT INTO ticket_comments (ticket_id, text, user_id) VALUES (?, ?, ?)').run(id, comment, req.user.id);
+       await db.prepare('INSERT INTO ticket_comments (ticket_id, text, user_id) VALUES (?, ?, ?)').run(id, comment, req.user.id);
     }
     res.json({ success: true });
   } catch(e) { console.error(e); res.status(500).send(); }
@@ -476,8 +480,8 @@ app.delete("/api/tickets/:id", authenticateToken, async (req: any, res) => {
   try {
     const id = parseInt(req.params.id);
     const { reason } = req.body;
-    db.prepare('UPDATE tickets SET deleted = 1, status = ?, deleted_at = CURRENT_TIMESTAMP, deleted_by = ?, delete_reason = ? WHERE id = ?').run('Excluído', req.user.id, reason, id);
-    db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(id, `Chamado excluído. Motivo: ${reason}`, req.user.id);
+    await db.prepare('UPDATE tickets SET deleted = true, status = ?, deleted_at = CURRENT_TIMESTAMP, deleted_by = ?, delete_reason = ? WHERE id = ?').run('Excluído', req.user.id, reason, id);
+    await db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(id, `Chamado excluído. Motivo: ${reason}`, req.user.id);
     res.json({ success: true });
   } catch(e) { res.status(500).send(); }
 });
@@ -486,12 +490,12 @@ app.delete("/api/tickets/:id", authenticateToken, async (req: any, res) => {
 app.get("/api/dashboard", authenticateToken, async (req: any, res) => {
   try {
     const { startDate, endDate } = req.query;
-    let baseWhere = 'deleted = 0';
+    let baseWhere = 'deleted = false';
     let params: any[] = [];
     if (startDate) { params.push(startDate); baseWhere += ` AND created_at >= ?`; }
     if (endDate) { params.push(`${endDate} 23:59:59`); baseWhere += ` AND created_at <= ?`; }
     
-    const rows = db.prepare(`SELECT status, bank, priority, sla_deadline FROM tickets WHERE ${baseWhere}`).all(...params);
+    const rows = await db.prepare(`SELECT status, bank, priority, sla_deadline FROM tickets WHERE ${baseWhere}`).all(...params);
     
     const stats = {
        abertos: rows.filter((t:any) => t.status === 'Aberto').length,
@@ -508,7 +512,7 @@ app.get("/api/dashboard", authenticateToken, async (req: any, res) => {
 app.get("/api/analytics/insights", authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'ADMIN' && req.user.role !== 'GESTAO') return res.sendStatus(403);
   try {
-    const tickets = db.prepare(`SELECT t.status, t.bank, t.priority, t.import_type, t.created_at, t.finished_at, t.sla_deadline, u.name as assignee FROM tickets t LEFT JOIN users u ON t.assignee_id = u.id WHERE t.deleted = 0`).all();
+    const tickets = await db.prepare(`SELECT t.status, t.bank, t.priority, t.import_type, t.created_at, t.finished_at, t.sla_deadline, u.name as assignee FROM tickets t LEFT JOIN users u ON t.assignee_id = u.id WHERE t.deleted = false`).all();
     
     const prompt = `Você é um analista de operações sênior do sistema ImportFlow C2. 
 Aqui estão os chamados do sistema em formato JSON:
@@ -544,7 +548,7 @@ Limite a 5 insights e 3 gargalos. Seja direto, profissional e baseie-se estritam
 app.get("/api/admin/users", authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
-    const rows = db.prepare('SELECT id, name, login, email, role, sector, active, created_at as "createdAt", last_login as "lastLogin", force_password_reset as "forcePasswordReset" FROM users').all();
+    const rows = await db.prepare('SELECT id, name, login, email, role, sector, active, created_at as "createdAt", last_login as "lastLogin", force_password_reset as "forcePasswordReset" FROM users').all();
     res.json(rows.map((row: any) => ({ ...row, active: Boolean(row.active), forcePasswordReset: Boolean(row.forcePasswordReset) })));
   } catch(e) { res.status(500).send(); }
 });
@@ -554,10 +558,10 @@ app.post("/api/admin/users", authenticateToken, async (req: any, res) => {
   try {
     const { name, email, login, role, sector, password } = req.body;
     const pwd = hashPassword(password);
-    const result = db.prepare(
-      `INSERT INTO users (name, email, login, role, sector, password, active, force_password_reset) VALUES (?, ?, ?, ?, ?, ?, 1, 1)`
+    const result = await db.prepare(
+      `INSERT INTO users (name, email, login, role, sector, password, active, force_password_reset) VALUES (?, ?, ?, ?, ?, ?, true, true)`
     ).run(name, email, login, role, sector, pwd);
-    const user = db.prepare('SELECT id, name, email, role, sector FROM users WHERE id = ?').get(result.lastInsertRowid);
+    const user = await db.prepare('SELECT id, name, email, role, sector FROM users WHERE id = ?').get(result.lastInsertRowid);
     res.json(user);
   } catch(e) { console.error(e); res.status(500).send(); }
 });
@@ -568,9 +572,9 @@ app.put("/api/admin/users/:id", authenticateToken, async (req: any, res) => {
     const id = parseInt(req.params.id);
     const { name, email, login, role, sector, active, password } = req.body;
     if (password) {
-       db.prepare('UPDATE users SET name=?, email=?, login=?, role=?, sector=?, active=?, password=? WHERE id=?').run(name, email, login, role, sector, active ? 1 : 0, hashPassword(password), id);
+       await db.prepare('UPDATE users SET name=?, email=?, login=?, role=?, sector=?, active=?, password=? WHERE id=?').run(name, email, login, role, sector, active ? true : false, hashPassword(password), id);
     } else {
-       db.prepare('UPDATE users SET name=?, email=?, login=?, role=?, sector=?, active=? WHERE id=?').run(name, email, login, role, sector, active ? 1 : 0, id);
+       await db.prepare('UPDATE users SET name=?, email=?, login=?, role=?, sector=?, active=? WHERE id=?').run(name, email, login, role, sector, active ? true : false, id);
     }
     res.json({ success: true });
   } catch(e) { res.status(500).send(); }
@@ -580,7 +584,7 @@ app.post("/api/admin/users/:id/reset-password", authenticateToken, async (req: a
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
     const tempPassword = Math.random().toString(36).slice(-8);
-    db.prepare('UPDATE users SET password = ?, force_password_reset = 1 WHERE id = ?').run(hashPassword(tempPassword), req.params.id);
+    await db.prepare('UPDATE users SET password = ?, force_password_reset = true WHERE id = ?').run(hashPassword(tempPassword), req.params.id);
     res.json({ success: true, tempPassword });
   } catch(e) { res.status(500).send(); }
 });
@@ -588,7 +592,7 @@ app.post("/api/admin/users/:id/reset-password", authenticateToken, async (req: a
 app.get("/api/admin/logs", authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'ADMIN') return res.sendStatus(403);
   try {
-    const rows = db.prepare('SELECT * FROM login_logs ORDER BY timestamp DESC').all();
+    const rows = await db.prepare('SELECT * FROM login_logs ORDER BY timestamp DESC').all();
     res.json(rows.map(toCamel));
   } catch(e) { res.status(500).send(); }
 });
@@ -596,10 +600,10 @@ app.get("/api/admin/logs", authenticateToken, async (req: any, res) => {
 // External Params
 app.get("/api/params/all", authenticateToken, async (req: any, res) => {
   try {
-    const banks = db.prepare('SELECT * FROM banks WHERE deleted = 0 AND active = 1').all();
-    const impTypes = db.prepare('SELECT * FROM import_types WHERE deleted = 0 AND active = 1').all();
-    const prios = db.prepare('SELECT * FROM priorities WHERE deleted = 0 AND active = 1 ORDER BY sla ASC').all();
-    const stats = db.prepare('SELECT * FROM statuses WHERE deleted = 0 AND active = 1 ORDER BY "order" ASC').all();
+    const banks = await db.prepare('SELECT * FROM banks WHERE deleted = false AND active = true').all();
+    const impTypes = await db.prepare('SELECT * FROM import_types WHERE deleted = false AND active = true').all();
+    const prios = await db.prepare('SELECT * FROM priorities WHERE deleted = false AND active = true ORDER BY sla ASC').all();
+    const stats = await db.prepare('SELECT * FROM statuses WHERE deleted = false AND active = true ORDER BY "order" ASC').all();
     
     res.json({
       banks: banks.map(toCamel),
@@ -613,7 +617,7 @@ app.get("/api/params/all", authenticateToken, async (req: any, res) => {
 const generateCrud = (pathPrefix: string, tableName: string) => {
   app.get(`/api/admin/${pathPrefix}`, authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'ADMIN') return res.sendStatus(403);
-    try { const rows = db.prepare(`SELECT * FROM ${tableName} WHERE deleted = 0`).all(); res.json(rows.map((row: any) => ({ ...toCamel(row), active: Boolean(row.active) }))); } catch(e) { res.status(500).send(); }
+    try { const rows = await db.prepare(`SELECT * FROM ${tableName} WHERE deleted = false`).all(); res.json(rows.map((row: any) => ({ ...toCamel(row), active: Boolean(row.active) }))); } catch(e) { res.status(500).send(); }
   });
   app.post(`/api/admin/${pathPrefix}`, authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'ADMIN') return res.sendStatus(403);
@@ -621,10 +625,10 @@ const generateCrud = (pathPrefix: string, tableName: string) => {
       let keys = Object.keys(req.body).filter(k => k !== 'id' && k !== 'createdAt' && k !== 'deleted');
       const qCols = keys.map(k => `"${k.replace(/[A-Z]/g, m => "_" + m.toLowerCase())}"`).join(', ');
       const qVals = keys.map((_, i) => `?`).join(', ');
-      const vals = keys.map(k => typeof req.body[k] === 'boolean' ? (req.body[k] ? 1 : 0) : req.body[k]);
+      const vals = keys.map(k => typeof req.body[k] === 'boolean' ? (req.body[k] ? true : false) : req.body[k]);
       
-      const result = db.prepare(`INSERT INTO ${tableName} (${qCols}) VALUES (${qVals})`).run(...vals);
-      const newRow = db.prepare(`SELECT * FROM ${tableName} WHERE id = ?`).get(result.lastInsertRowid);
+      const result = await db.prepare(`INSERT INTO ${tableName} (${qCols}) VALUES (${qVals})`).run(...vals);
+      const newRow = await db.prepare(`SELECT * FROM ${tableName} WHERE id = ?`).get(result.lastInsertRowid);
       res.json({ ...toCamel(newRow), active: Boolean((newRow as any).active) });
     } catch(e) { console.error(e); res.status(500).send(); }
   });
@@ -633,18 +637,18 @@ const generateCrud = (pathPrefix: string, tableName: string) => {
     try {
       const keys = Object.keys(req.body).filter(k => k !== 'id' && k !== 'createdAt' && k !== 'deleted');
       const qSet = keys.map((k, i) => `"${k.replace(/[A-Z]/g, m => "_" + m.toLowerCase())}" = ?`).join(', ');
-      const vals = keys.map(k => typeof req.body[k] === 'boolean' ? (req.body[k] ? 1 : 0) : req.body[k]);
+      const vals = keys.map(k => typeof req.body[k] === 'boolean' ? (req.body[k] ? true : false) : req.body[k]);
       vals.push(req.params.id);
       
-      db.prepare(`UPDATE ${tableName} SET ${qSet} WHERE id = ?`).run(...vals);
-      const updatedRow = db.prepare(`SELECT * FROM ${tableName} WHERE id = ?`).get(req.params.id);
+      await db.prepare(`UPDATE ${tableName} SET ${qSet} WHERE id = ?`).run(...vals);
+      const updatedRow = await db.prepare(`SELECT * FROM ${tableName} WHERE id = ?`).get(req.params.id);
       res.json({ ...toCamel(updatedRow), active: Boolean((updatedRow as any).active) });
     } catch(e) { console.error(e); res.status(500).send(); }
   });
   app.delete(`/api/admin/${pathPrefix}/:id`, authenticateToken, async (req: any, res) => {
     if (req.user.role !== 'ADMIN') return res.sendStatus(403);
     try {
-      db.prepare(`UPDATE ${tableName} SET deleted = 1 WHERE id = ?`).run(req.params.id);
+      await db.prepare(`UPDATE ${tableName} SET deleted = true WHERE id = ?`).run(req.params.id);
       res.json({ success: true });
     } catch(e) { res.status(500).send(); }
   });
@@ -657,7 +661,7 @@ generateCrud('statuses', 'statuses');
 
 // Root Express config
 async function startServer() {
-  setupDatabase();
+  await setupDatabase();
 
   app.use((err: any, req: any, res: any, next: any) => {
     console.error(`[ERRO CRÍTICO] Rota: ${req.url} - `, err.stack);
