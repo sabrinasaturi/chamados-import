@@ -15,7 +15,7 @@ import { Pool } from "pg";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 const SECRET_KEY = process.env.JWT_SECRET || "importflow-super-secret-c2";
 const REFRESH_SECRET = process.env.REFRESH_SECRET || "importflow-refresh-secret-c2";
 
@@ -33,7 +33,7 @@ const authLimiter = rateLimit({
   message: "Muitas tentativas de login, por favor tente novamente mais tarde."
 });
 
-let refreshTokens: string[] = []; 
+
 
 const uploadDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
@@ -327,7 +327,6 @@ app.post("/api/login", authLimiter, async (req, res) => {
       const tokenUser = { id: user.id, role: user.role, name: user.name, forcePasswordReset: user.force_password_reset };
       const token = jwt.sign(tokenUser, SECRET_KEY, { expiresIn: '15m' });
       const refreshToken = jwt.sign({ id: user.id }, REFRESH_SECRET, { expiresIn: '7d' });
-      refreshTokens.push(refreshToken);
 
       res.json({ token, refreshToken, user: { id: user.id, name: user.name, role: user.role, email: user.email, forcePasswordReset: user.force_password_reset } });
     } else {
@@ -341,7 +340,7 @@ app.post("/api/login", authLimiter, async (req, res) => {
 
 app.post("/api/refresh", async (req, res) => {
   const { token } = req.body;
-  if (!token || !refreshTokens.includes(token)) return res.sendStatus(401);
+  if (!token) return res.sendStatus(401);
   jwt.verify(token, REFRESH_SECRET, async (err: any, tokenUser: any) => {
     if (err) return res.sendStatus(403);
     const user = await db.prepare('SELECT * FROM users WHERE id = ? AND active = true').get(tokenUser.id);
@@ -352,7 +351,6 @@ app.post("/api/refresh", async (req, res) => {
 });
 
 app.post("/api/logout", async (req, res) => {
-  refreshTokens = refreshTokens.filter(rt => rt !== req.body.token);
   res.sendStatus(204);
 });
 
