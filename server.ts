@@ -72,19 +72,37 @@ const toCamel = (o: any) => {
 
 let pool: Pool;
 let db: any = {
-  prepare: () => { throw new Error("DATABASE_URL não configurada no servidor. Conexão real com o banco está desabilitada."); },
-  exec: () => { throw new Error("DATABASE_URL não configurada no servidor. Conexão real com o banco está desabilitada."); }
+  prepare: () => { throw new Error("DATABASE_URL não configurada ou banco offline. Conexão real com o banco está desabilitada."); },
+  exec: () => { throw new Error("DATABASE_URL não configurada ou banco offline. Conexão real com o banco está desabilitada."); }
 };
 
 async function setupDatabase() {
   if (!process.env.DATABASE_URL) {
-    console.error("ERRO CRÍTICO: DATABASE_URL não definida! Para usar PostgreSQL, configure a secret DATABASE_URL no AI Studio.");
-    return; // Aborta a inicialização real, utiliza db com dummy de erro
+    console.error("\n❌ [BOOT ERRO] DATABASE_URL não definida! Para usar o PostgreSQL do Supabase, configure a secret DATABASE_URL no AI Studio.\n");
+    return;
   }
+  
+  console.log("✅ [BOOT INFO] DATABASE_URL carregada.");
+
   pool = new Pool({ 
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_URL && process.env.DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
+    ssl: process.env.DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
   });
+
+  pool.on('error', (err) => {
+    console.error("❌ [PostgreSQL] Erro inesperado no pool de conexões:", err);
+  });
+
+  try {
+    const client = await pool.connect();
+    console.log("✅ [BOOT SUCESSO] PostgreSQL conectado com sucesso.");
+    client.release();
+  } catch (e) {
+    console.error("\n❌ [BOOT ERRO] Falha na conexão com o banco de dados PostgreSQL. Verifique suas credenciais.");
+    console.error(e);
+    console.error("\n");
+    return; // Não inicializa o `db` e não tenta criar as tabelas.
+  }
 
   db = {
     exec: async (sql: string) => {
@@ -93,7 +111,12 @@ async function setupDatabase() {
         .replace(/DATETIME/g, 'TIMESTAMP')
         .replace(/BOOLEAN DEFAULT 1/g, 'BOOLEAN DEFAULT true')
         .replace(/BOOLEAN DEFAULT 0/g, 'BOOLEAN DEFAULT false');
-      return await pool.query(pgSql);
+      try {
+        return await pool.query(pgSql);
+      } catch (e) {
+        console.error(`❌ [SQL ERRO - EXEC] Falha ao executar: ${pgSql}`, e);
+        throw e;
+      }
     },
     prepare: (sql: string) => {
       let pgSql = sql;
@@ -107,158 +130,186 @@ async function setupDatabase() {
         get: async (...params: any[]) => {
           let paramArr = params;
           if(paramArr.length === 1 && Array.isArray(paramArr[0])) paramArr = paramArr[0];
-          const res = await pool.query({ text: pgSql, values: paramArr });
-          return res.rows[0];
+          try {
+             const res = await pool.query({ text: pgSql, values: paramArr });
+             return res.rows[0];
+          } catch(e) {
+             console.error(`❌ [SQL ERRO - GET] ${pgSql}`, e);
+             throw e;
+          }
         },
         all: async (...params: any[]) => {
           let paramArr = params;
           if(paramArr.length === 1 && Array.isArray(paramArr[0])) paramArr = paramArr[0];
-          const res = await pool.query({ text: pgSql, values: paramArr });
-          return res.rows;
+          try {
+             const res = await pool.query({ text: pgSql, values: paramArr });
+             return res.rows;
+          } catch(e) {
+             console.error(`❌ [SQL ERRO - ALL] ${pgSql}`, e);
+             throw e;
+          }
         },
         run: async (...params: any[]) => {
           let paramArr = params;
           if(paramArr.length === 1 && Array.isArray(paramArr[0])) paramArr = paramArr[0];
-          const res = await pool.query({ text: pgSql, values: paramArr });
-          return { lastInsertRowid: res.rows[0]?.id };
+          try {
+             const res = await pool.query({ text: pgSql, values: paramArr });
+             return { lastInsertRowid: res.rows[0]?.id };
+          } catch(e) {
+             console.error(`❌ [SQL ERRO - RUN] ${pgSql}`, e);
+             throw e;
+          }
         }
       }
     }
   };
 
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      email TEXT UNIQUE,
-      login TEXT UNIQUE,
-      role TEXT NOT NULL,
-      sector TEXT,
-      password TEXT NOT NULL,
-      active BOOLEAN DEFAULT 1,
-      force_password_reset BOOLEAN DEFAULT 1,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      last_login DATETIME
-    );
+  try {
+    await db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE,
+        login TEXT UNIQUE,
+        role TEXT NOT NULL,
+        sector TEXT,
+        password TEXT NOT NULL,
+        active BOOLEAN DEFAULT true,
+        force_password_reset BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_login TIMESTAMP
+      );
 
-    CREATE TABLE IF NOT EXISTS login_logs (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      name TEXT,
-      ip TEXT,
-      user_agent TEXT,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
+      CREATE TABLE IF NOT EXISTS login_logs (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER,
+        name TEXT,
+        ip TEXT,
+        user_agent TEXT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-    CREATE TABLE IF NOT EXISTS tickets (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ticket_number TEXT UNIQUE NOT NULL,
-      proposals TEXT,
-      bank TEXT,
-      import_type TEXT,
-      priority TEXT,
-      observation TEXT,
-      status TEXT,
-      requester_id INTEGER,
-      assignee_id INTEGER,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      sla_deadline DATETIME,
-      finished_at DATETIME,
-      deleted BOOLEAN DEFAULT 0,
-      delete_reason TEXT,
-      deleted_by INTEGER,
-      deleted_at DATETIME
-    );
+      CREATE TABLE IF NOT EXISTS tickets (
+        id SERIAL PRIMARY KEY,
+        ticket_number TEXT UNIQUE NOT NULL,
+        proposals TEXT,
+        bank TEXT,
+        import_type TEXT,
+        priority TEXT,
+        observation TEXT,
+        status TEXT,
+        requester_id INTEGER,
+        assignee_id INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        sla_deadline TIMESTAMP,
+        finished_at TIMESTAMP,
+        deleted BOOLEAN DEFAULT false,
+        delete_reason TEXT,
+        deleted_by INTEGER,
+        deleted_at TIMESTAMP
+      );
 
-    CREATE TABLE IF NOT EXISTS ticket_history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ticket_id INTEGER,
-      action TEXT,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-      user_id INTEGER
-    );
+      CREATE TABLE IF NOT EXISTS ticket_history (
+        id SERIAL PRIMARY KEY,
+        ticket_id INTEGER,
+        action TEXT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        user_id INTEGER
+      );
 
-    CREATE TABLE IF NOT EXISTS ticket_comments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ticket_id INTEGER,
-      text TEXT,
-      timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-      user_id INTEGER
-    );
+      CREATE TABLE IF NOT EXISTS ticket_comments (
+        id SERIAL PRIMARY KEY,
+        ticket_id INTEGER,
+        text TEXT,
+        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        user_id INTEGER
+      );
 
-    CREATE TABLE IF NOT EXISTS attachments (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ticket_id INTEGER,
-      original_name TEXT,
-      internal_name TEXT,
-      extension TEXT,
-      type TEXT,
-      size INTEGER,
-      uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      user_id INTEGER,
-      storage_path TEXT,
-      local_path TEXT
-    );
+      CREATE TABLE IF NOT EXISTS attachments (
+        id SERIAL PRIMARY KEY,
+        ticket_id INTEGER,
+        original_name TEXT,
+        internal_name TEXT,
+        extension TEXT,
+        type TEXT,
+        size INTEGER,
+        uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        user_id INTEGER,
+        storage_path TEXT,
+        local_path TEXT,
+        file_data TEXT
+      );
 
-    CREATE TABLE IF NOT EXISTS banks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      color TEXT,
-      active BOOLEAN DEFAULT 1,
-      deleted BOOLEAN DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
+      CREATE TABLE IF NOT EXISTS banks (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        color TEXT,
+        active BOOLEAN DEFAULT true,
+        deleted BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-    CREATE TABLE IF NOT EXISTS import_types (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      color TEXT,
-      active BOOLEAN DEFAULT 1,
-      deleted BOOLEAN DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
+      CREATE TABLE IF NOT EXISTS import_types (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        color TEXT,
+        active BOOLEAN DEFAULT true,
+        deleted BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-    CREATE TABLE IF NOT EXISTS priorities (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      sla INTEGER,
-      sla_unit TEXT,
-      color TEXT,
-      active BOOLEAN DEFAULT 1,
-      deleted BOOLEAN DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
+      CREATE TABLE IF NOT EXISTS priorities (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        sla INTEGER,
+        sla_unit TEXT,
+        color TEXT,
+        active BOOLEAN DEFAULT true,
+        deleted BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
 
-    CREATE TABLE IF NOT EXISTS statuses (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      is_final BOOLEAN DEFAULT 0,
-      "order" INTEGER,
-      color TEXT,
-      active BOOLEAN DEFAULT 1,
-      deleted BOOLEAN DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    );
-  `);
+      CREATE TABLE IF NOT EXISTS statuses (
+        id SERIAL PRIMARY KEY,
+        name TEXT NOT NULL,
+        is_final BOOLEAN DEFAULT false,
+        "order" INTEGER,
+        color TEXT,
+        active BOOLEAN DEFAULT true,
+        deleted BOOLEAN DEFAULT false,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log("✅ [BOOT INFO] Tabelas criadas/verificadas com sucesso.");
+  } catch (e) {
+    console.error("❌ [BOOT ERRO] Falha ao executar migrations iniciais (CREATE TABLE):", e);
+  }
 
   try { await db.exec('ALTER TABLE banks ADD COLUMN color TEXT'); } catch(e){}
   try { await db.exec('ALTER TABLE import_types ADD COLUMN color TEXT'); } catch(e){}
   try { await db.exec('ALTER TABLE priorities ADD COLUMN color TEXT'); } catch(e){}
   try { await db.exec('ALTER TABLE statuses ADD COLUMN color TEXT'); } catch(e){}
+  try { await db.exec('ALTER TABLE attachments ADD COLUMN file_data TEXT'); } catch(e){}
 
-  const usersCount = await db.prepare('SELECT COUNT(*) as c FROM users').get();
-  if (usersCount.c === 0) {
-    const pwd = hashPassword('admin123');
-    await db.prepare('INSERT INTO users (name, email, login, role, sector, password, active, force_password_reset) VALUES (?, ?, ?, ?, ?, ?, true, false)')
-      .run('Administrador', 'admin@c2.com', 'admin', 'ADMIN', 'Tecnologia', pwd);
-  }
+  try {
+    const usersCount = await db.prepare('SELECT COUNT(*) as c FROM users').get();
+    if (parseInt(usersCount.c, 10) === 0) {
+      const pwd = hashPassword('admin123');
+      await db.prepare('INSERT INTO users (name, email, login, role, sector, password, active, force_password_reset) VALUES (?, ?, ?, ?, ?, ?, true, false)')
+        .run('Administrador', 'admin@c2.com', 'admin', 'ADMIN', 'Tecnologia', pwd);
+      console.log("🌟 [BOOT INFO] Usuário Admin criado (admin/admin123).");
+    }
 
-  const statusCount = await db.prepare('SELECT COUNT(*) as c FROM statuses').get();
-  if (statusCount.c === 0) {
-    await db.prepare(`INSERT INTO statuses (name, "order", is_final) VALUES ('Aberto', 1, false), ('Em andamento', 2, false), ('Finalizado', 3, true)`).run();
-    await db.prepare(`INSERT INTO priorities (name, sla, sla_unit) VALUES ('Baixa', 24, 'horas'), ('Média', 8, 'horas'), ('Alta', 4, 'horas')`).run();
-    await db.prepare(`INSERT INTO banks (name) VALUES ('Banco do Brasil'), ('Caixa'), ('Itaú'), ('Santander'), ('Bradesco')`).run();
-    await db.prepare(`INSERT INTO import_types (name) VALUES ('CSV Padrão'), ('Planilha Excel'), ('Integração API')`).run();
+    const statusCount = await db.prepare('SELECT COUNT(*) as c FROM statuses').get();
+    if (parseInt(statusCount.c, 10) === 0) {
+      await db.prepare(`INSERT INTO statuses (name, "order", is_final) VALUES ('Aberto', 1, false), ('Em andamento', 2, false), ('Finalizado', 3, true)`).run();
+      await db.prepare(`INSERT INTO priorities (name, sla, sla_unit) VALUES ('Baixa', 24, 'horas'), ('Média', 8, 'horas'), ('Alta', 4, 'horas')`).run();
+      await db.prepare(`INSERT INTO banks (name) VALUES ('Banco do Brasil'), ('Caixa'), ('Itaú'), ('Santander'), ('Bradesco')`).run();
+      await db.prepare(`INSERT INTO import_types (name) VALUES ('CSV Padrão'), ('Planilha Excel'), ('Integração API')`).run();
+      console.log("🌟 [BOOT INFO] Dados de parametrização iniciais inseridos com sucesso.");
+    }
+  } catch(e) {
+    console.error("❌ [BOOT ERRO] Falha ao rodar os seeds iniciais:", e);
   }
 }
 
@@ -381,14 +432,12 @@ app.post("/api/tickets", authenticateToken, async (req: any, res) => {
         const uniqueInternalName = `att_${Date.now()}_${Math.floor(Math.random()*1000)}_${safeName}`;
         
         try {
-           const buffer = Buffer.from(att.data.replace(/^data:.*?;base64,/, ""), "base64");
-           const localPath = path.join(uploadDir, uniqueInternalName);
-           fs.writeFileSync(localPath, buffer);
+           const base64Data = att.data.replace(/^data:.*?;base64,/, "");
 
            await db.prepare(
-             `INSERT INTO attachments (ticket_id, original_name, internal_name, extension, type, size, user_id, local_path) 
+             `INSERT INTO attachments (ticket_id, original_name, internal_name, extension, type, size, user_id, file_data) 
               VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-           ).run(ticketId, att.name, uniqueInternalName, ext, att.type, att.size, req.user.id, localPath);
+           ).run(ticketId, att.name, uniqueInternalName, ext, att.type, att.size, req.user.id, base64Data);
            await db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(ticketId, `Anexo adicionado: ${att.name}`, req.user.id);
         } catch(e) { console.error("[FILE UPLOAD ERROR]", e); }
       }
@@ -411,7 +460,10 @@ app.get("/api/attachments/:id/download", authenticateToken, async (req: any, res
     const att = await db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id);
     if (!att) return res.sendStatus(404);
     
-    if (att.local_path && fs.existsSync(att.local_path)) {
+    if (att.file_data) {
+      return res.json({ data: `data:${att.type};base64,${att.file_data}`, name: att.original_name, type: att.type });
+    } else if (att.local_path && fs.existsSync(att.local_path)) {
+      // Fallback para anexos antigos
       const buffer = fs.readFileSync(att.local_path);
       const base64 = buffer.toString('base64');
       return res.json({ data: `data:${att.type};base64,${base64}`, name: att.original_name, type: att.type });
