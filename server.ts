@@ -355,6 +355,22 @@ async function setupDatabase() {
   }
 }
 
+// Root Express config
+let isDbSetup = false;
+let dbSetupPromise: Promise<void> | null = null;
+
+// Middleware para garantir que o banco seja inicializado antes de qualquer rota /api em ambiente Serverless
+app.use(async (req, res, next) => {
+  if (req.url.startsWith('/api')) {
+    if (!isDbSetup) {
+      if (!dbSetupPromise) dbSetupPromise = setupDatabase();
+      await dbSetupPromise;
+      isDbSetup = true;
+    }
+  }
+  next();
+});
+
 // --- API Routes ---
 
 app.post("/api/login", authLimiter, async (req, res) => {
@@ -777,21 +793,6 @@ generateCrud('banks', 'banks');
 generateCrud('import-types', 'import_types');
 generateCrud('priorities', 'priorities');
 generateCrud('statuses', 'statuses');
-
-// Root Express config
-let isDbSetup = false;
-let dbSetupPromise: Promise<void> | null = null;
-
-app.use(async (req, res, next) => {
-  if (req.url.startsWith('/api')) {
-    if (!isDbSetup) {
-      if (!dbSetupPromise) dbSetupPromise = setupDatabase();
-      await dbSetupPromise;
-      isDbSetup = true;
-    }
-  }
-  next();
-});
 
 app.use((err: any, req: any, res: any, next: any) => {
   console.error(`[ERRO CRÍTICO] Rota: ${req.url} - `, err.stack);
