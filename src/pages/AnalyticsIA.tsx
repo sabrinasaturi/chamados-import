@@ -24,8 +24,8 @@ export default function AnalyticsIA() {
       setError(false);
       const res = await api.get('/analytics/insights');
       setData(res.data);
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      console.error("[ANALYTICS] Falha:", e?.message || e);
       setError(true);
     } finally {
       setLoading(false);
@@ -83,11 +83,11 @@ export default function AnalyticsIA() {
                 <h3 className="text-sm font-bold text-[var(--color-ink-secondary)] uppercase tracking-widest flex items-center gap-2 border-b border-[var(--color-border)] pb-3 mb-2">
                   <Lightbulb className="w-4 h-4 text-emerald-500" /> Insights & Oportunidades
                 </h3>
-                {data.insights.length === 0 ? (
+                {(data.insights || []).length === 0 ? (
                   <p className="text-sm italic text-[var(--color-ink-secondary)]">Sem insights operacionais (volumetria baixa)</p>
                 ) : (
                   <ul className="space-y-4">
-                    {data.insights.map((insight, i) => (
+                    {(data.insights || []).map((insight, i) => (
                       <li key={i} className="flex gap-3 text-sm text-[var(--color-ink-primary)] leading-relaxed">
                         <div className="w-5 h-5 rounded-full bg-emerald-500/20 shrink-0 flex items-center justify-center mt-0.5">
                            <CheckIcon className="w-3 h-3 text-emerald-600" />
@@ -104,11 +104,11 @@ export default function AnalyticsIA() {
                 <h3 className="text-sm font-bold text-[var(--color-ink-secondary)] uppercase tracking-widest flex items-center gap-2 border-b border-[var(--color-border)] pb-3 mb-2">
                   <AlertTriangle className="w-4 h-4 text-red-500" /> Gargalos & Alertas
                 </h3>
-                {data.bottlenecks.length === 0 ? (
+                {(data.bottlenecks || []).length === 0 ? (
                   <p className="text-sm italic text-[var(--color-ink-secondary)]">Sem gargalos detectados na avaliação atual</p>
                 ) : (
                   <ul className="space-y-4">
-                    {data.bottlenecks.map((b, i) => (
+                    {(data.bottlenecks || []).map((b, i) => (
                       <li key={i} className="flex gap-3 text-sm text-[var(--color-ink-primary)] leading-relaxed">
                         <div className="w-5 h-5 rounded-full bg-red-500/20 shrink-0 flex items-center justify-center mt-0.5">
                            <AlertTriangle className="w-2.5 h-2.5 text-red-600" />

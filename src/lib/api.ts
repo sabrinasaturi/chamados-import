@@ -16,6 +16,10 @@ api.interceptors.request.use(config => {
 api.interceptors.response.use(
   response => response,
   async error => {
+    console.error("[API ERROR]", error?.message, error?.response?.status, error?.config?.url);
+    if (error.code === 'ECONNABORTED' || error.message.includes('timeout')) {
+       console.error("[API TIMEOUT] Request demorou muito!");
+    }
     const originalRequest = error.config;
     if (error.response?.status === 401 && !originalRequest._retry && originalRequest.url !== '/login' && originalRequest.url !== '/refresh') {
       originalRequest._retry = true;

@@ -12,6 +12,7 @@ type DatePreset = 'today' | '7days' | '30days' | 'thisMonth' | 'custom';
 export default function Dashboard() {
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const { user } = useAuth();
   const { theme } = useTheme();
 
@@ -46,6 +47,7 @@ export default function Dashboard() {
 
   const fetchStats = async () => {
     setLoading(true);
+    setError(false);
     try {
       const params = new URLSearchParams();
       if (dateRange?.start) params.append('startDate', dateRange.start);
@@ -55,6 +57,7 @@ export default function Dashboard() {
       setStats(res.data);
     } catch (err) {
       console.error("error fetching stats", err);
+      setError(true);
     } finally {
       setLoading(false);
     }
@@ -152,13 +155,26 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {!stats || loading ? (
+      {loading ? (
         <div className="flex items-center justify-center py-20">
            <div className="animate-pulse flex flex-col items-center">
               <div className="w-12 h-12 rounded-full border-4 border-[var(--color-brand-wine)]/30 border-t-[var(--color-brand-wine)] animate-spin mb-4"></div>
               <p className="text-[var(--color-ink-secondary)] font-medium">Carregando indicadores corporativos...</p>
            </div>
         </div>
+      ) : error || !stats ? (
+         <div className="flex-1 flex items-center justify-center py-20">
+           <div className="flex flex-col items-center p-14 text-center rounded-2xl bg-white border border-gray-100 shadow-sm gap-4">
+              <AlertCircle className="w-12 h-12 text-red-500/80" />
+              <div className="space-y-1">
+                <h3 className="font-bold text-lg text-gray-900">Falha ao carregar dashboard</h3>
+                <p className="text-gray-500 max-w-sm">Houve um problema de conectividade ao montar as estatísticas.</p>
+              </div>
+              <button onClick={fetchStats} className="btn-secondary py-2 px-4 shadow-sm text-sm mt-2 border border-gray-300">
+                 Tentar novamente
+              </button>
+           </div>
+         </div>
       ) : (
         <>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">

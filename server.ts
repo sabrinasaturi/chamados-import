@@ -25,6 +25,24 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(compression());
 app.use(cors({ origin: process.env.VITE_APP_URL || '*' }));
 app.use(express.json({ limit: "50mb" }));
+
+// Request Timeout Middleware
+app.use((req, res, next) => {
+  req.setTimeout(25000, () => {
+    console.log(`[API TIMEOUT] ${req.method} ${req.url}`);
+    res.status(504).json({ error: "Gateway Timeout - Request taking too long" });
+  });
+  next();
+});
+
+app.use((req, res, next) => {
+  const start = Date.now();
+  console.log(`[API START] ${req.method} ${req.url}`);
+  res.on('finish', () => {
+    console.log(`[API RESPONSE] ${req.method} ${req.url} - ${res.statusCode} (${Date.now() - start}ms)`);
+  });
+  next();
+});
 app.use(morgan('combined'));
 
 const authLimiter = rateLimit({
@@ -32,8 +50,6 @@ const authLimiter = rateLimit({
   max: 200, 
   message: "Muitas tentativas de login, por favor tente novamente mais tarde."
 });
-
-
 
 const uploadDir = path.join(process.cwd(), "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
@@ -51,9 +67,9 @@ const upload = multer({ storage, limits: { fileSize: 10 * 1024 * 1024 }, fileFil
 
 const authenticateToken = (req: any, res: any, next: any) => {
   const token = req.headers['authorization']?.split(' ')[1];
-  if (!token) return res.sendStatus(401);
+  if (!token) return res.status(401).json({ error: "Token ausente" });
   jwt.verify(token, SECRET_KEY, (err: any, user: any) => {
-    if (err) return res.sendStatus(403);
+    if (err) return res.status(403).json({ error: "Token inválido ou expirado" });
     req.user = user;
     next();
   });
@@ -67,9 +83,6 @@ const toCamel = (o: any) => {
   return newO;
 };
 
-
-
-
 let pool: Pool;
 let db: any = {
   prepare: () => { throw new Error("DATABASE_URL não configurada ou banco offline. Conexão real com o banco está desabilitada."); },
@@ -82,11 +95,14 @@ async function setupDatabase() {
     return;
   }
   
-  console.log("✅ [BOOT INFO] DATABASE_URL carregada.");
+  console.log("✅ [DATABASE_URL LOADED] Conectando ao banco...");
 
   pool = new Pool({ 
     connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false }
+    ssl: { rejectUnauthorized: false }, // Explicitado para o Supabase
+    connectionTimeoutMillis: 10000, // Timeout para falha de conexão (10s)
+    idleTimeoutMillis: 30000,
+    max: 20
   });
 
   pool.on('error', (err) => {
@@ -95,7 +111,7 @@ async function setupDatabase() {
 
   try {
     const client = await pool.connect();
-    console.log("✅ [BOOT SUCESSO] PostgreSQL conectado com sucesso.");
+    console.log("✅ [POSTGRES CONNECTED] PostgreSQL conectado com sucesso.");
     client.release();
   } catch (e) {
     console.error("\n❌ [BOOT ERRO] Falha na conexão com o banco de dados PostgreSQL. Verifique suas credenciais.");
@@ -112,9 +128,12 @@ async function setupDatabase() {
         .replace(/BOOLEAN DEFAULT 1/g, 'BOOLEAN DEFAULT true')
         .replace(/BOOLEAN DEFAULT 0/g, 'BOOLEAN DEFAULT false');
       try {
-        return await pool.query(pgSql);
+        console.log(`[QUERY START - EXEC]: ${pgSql.slice(0, 100)}...`);
+        const res = await pool.query({ text: pgSql });
+        console.log(`[QUERY SUCCESS] Executado comando struct: ${pgSql.slice(0, 50)}...`);
+        return res;
       } catch (e) {
-        console.error(`❌ [SQL ERRO - EXEC] Falha ao executar: ${pgSql}`, e);
+        console.error(`❌ [QUERY ERROR] Falha ao executar exec: ${pgSql.slice(0, 50)}`, e);
         throw e;
       }
     },
@@ -130,34 +149,52 @@ async function setupDatabase() {
         get: async (...params: any[]) => {
           let paramArr = params;
           if(paramArr.length === 1 && Array.isArray(paramArr[0])) paramArr = paramArr[0];
+          let client;
           try {
-             const res = await pool.query({ text: pgSql, values: paramArr });
+             client = await pool.connect();
+             await client.query('SET statement_timeout = 10000');
+             const res = await client.query({ text: pgSql, values: paramArr });
+             console.log(`[QUERY SUCCESS] Row fetched -> ${pgSql.slice(0, 60)}...`);
              return res.rows[0];
           } catch(e) {
-             console.error(`❌ [SQL ERRO - GET] ${pgSql}`, e);
+             console.error(`❌ [QUERY ERROR] (GET): ${pgSql.slice(0, 60)}...`, e);
              throw e;
+          } finally {
+             if (client) client.release();
           }
         },
         all: async (...params: any[]) => {
           let paramArr = params;
           if(paramArr.length === 1 && Array.isArray(paramArr[0])) paramArr = paramArr[0];
+          let client;
           try {
-             const res = await pool.query({ text: pgSql, values: paramArr });
+             client = await pool.connect();
+             await client.query('SET statement_timeout = 10000');
+             const res = await client.query({ text: pgSql, values: paramArr });
+             console.log(`[QUERY SUCCESS] ${res.rowCount} rows fetched -> ${pgSql.slice(0, 60)}...`);
              return res.rows;
           } catch(e) {
-             console.error(`❌ [SQL ERRO - ALL] ${pgSql}`, e);
+             console.error(`❌ [QUERY ERROR] (ALL): ${pgSql.slice(0, 60)}...`, e);
              throw e;
+          } finally {
+             if (client) client.release();
           }
         },
         run: async (...params: any[]) => {
           let paramArr = params;
           if(paramArr.length === 1 && Array.isArray(paramArr[0])) paramArr = paramArr[0];
+          let client;
           try {
-             const res = await pool.query({ text: pgSql, values: paramArr });
+             client = await pool.connect();
+             await client.query('SET statement_timeout = 10000');
+             const res = await client.query({ text: pgSql, values: paramArr });
+             console.log(`[QUERY SUCCESS] Run/Insert success -> ${pgSql.slice(0, 60)}...`);
              return { lastInsertRowid: res.rows[0]?.id };
           } catch(e) {
-             console.error(`❌ [SQL ERRO - RUN] ${pgSql}`, e);
+             console.error(`❌ [QUERY ERROR] (RUN): ${pgSql.slice(0, 60)}...`, e);
              throw e;
+          } finally {
+             if (client) client.release();
           }
         }
       }
@@ -318,6 +355,8 @@ async function setupDatabase() {
 app.post("/api/login", authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: "Email e senha obrigatórios." });
+    
     const user = await db.prepare('SELECT * FROM users WHERE (email = ? OR login = ?) AND active = true').get(email, email);
 
     if (user && user.password === hashPassword(password)) {
@@ -325,7 +364,7 @@ app.post("/api/login", authLimiter, async (req, res) => {
       await db.prepare('INSERT INTO login_logs (user_id, name, ip, user_agent) VALUES (?, ?, ?, ?)').run(user.id, user.name, req.ip, req.headers['user-agent']);
       
       const tokenUser = { id: user.id, role: user.role, name: user.name, forcePasswordReset: user.force_password_reset };
-      const token = jwt.sign(tokenUser, SECRET_KEY, { expiresIn: '15m' });
+      const token = jwt.sign(tokenUser, SECRET_KEY, { expiresIn: '12h' });
       const refreshToken = jwt.sign({ id: user.id }, REFRESH_SECRET, { expiresIn: '7d' });
 
       res.json({ token, refreshToken, user: { id: user.id, name: user.name, role: user.role, email: user.email, forcePasswordReset: user.force_password_reset } });
@@ -333,45 +372,61 @@ app.post("/api/login", authLimiter, async (req, res) => {
       res.status(401).json({ error: "Credenciais inválidas ou usuário inativo." });
     }
   } catch (e: any) {
-    console.error(e);
-    res.status(500).json({ error: "Erro de servidor interno" });
+    console.error("[LOGIN ERROR]", e);
+    res.status(500).json({ error: "Erro de servidor ao processar o login" });
   }
 });
 
 app.post("/api/refresh", async (req, res) => {
-  const { token } = req.body;
-  if (!token) return res.sendStatus(401);
-  jwt.verify(token, REFRESH_SECRET, async (err: any, tokenUser: any) => {
-    if (err) return res.sendStatus(403);
-    const user = await db.prepare('SELECT * FROM users WHERE id = ? AND active = true').get(tokenUser.id);
-    if (!user) return res.sendStatus(403);
-    const newToken = jwt.sign({ id: user.id, role: user.role, name: user.name, forcePasswordReset: user.force_password_reset }, SECRET_KEY, { expiresIn: '15m' });
-    res.json({ token: newToken });
-  });
+  try {
+    const { token } = req.body;
+    if (!token) return res.status(401).json({ error: "Token ausente" });
+    jwt.verify(token, REFRESH_SECRET, async (err: any, tokenUser: any) => {
+      if (err) return res.status(403).json({ error: "Refresh token expirado" });
+      const user = await db.prepare('SELECT * FROM users WHERE id = ? AND active = true').get(tokenUser.id);
+      if (!user) return res.status(403).json({ error: "Usuário inativo" });
+      const newToken = jwt.sign({ id: user.id, role: user.role, name: user.name, forcePasswordReset: user.force_password_reset }, SECRET_KEY, { expiresIn: '12h' });
+      res.json({ token: newToken });
+    });
+  } catch (e) {
+    res.status(500).json({ error: "Erro ao atualizar token" });
+  }
 });
 
 app.post("/api/logout", async (req, res) => {
-  res.sendStatus(204);
+  res.status(200).json({ success: true });
 });
 
 app.post("/api/users/change-password", authenticateToken, async (req: any, res) => {
-  const { currentPassword, newPassword } = req.body;
-  const user = await db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.id);
-  if (!user || user.password !== hashPassword(currentPassword)) return res.status(400).json({ error: "Senha atual incorreta." });
-  
-  await db.prepare('UPDATE users SET password = ?, force_password_reset = false WHERE id = ?').run(hashPassword(newPassword), req.user.id);
-  res.json({ success: true });
+  try {
+    const { currentPassword, newPassword } = req.body;
+    const user = await db.prepare('SELECT password FROM users WHERE id = ?').get(req.user.id);
+    if (!user || user.password !== hashPassword(currentPassword)) return res.status(400).json({ error: "Senha atual incorreta." });
+    
+    await db.prepare('UPDATE users SET password = ?, force_password_reset = false WHERE id = ?').run(hashPassword(newPassword), req.user.id);
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: "Erro ao alterar a senha" });
+  }
 });
 
 app.get("/api/users/me", authenticateToken, async (req: any, res) => {
-  const user = await db.prepare('SELECT id, name, role, email, force_password_reset FROM users WHERE id = ?').get(req.user.id);
-  if (user) res.json(toCamel(user));
-  else res.status(404).send();
+  try {
+    const user = await db.prepare('SELECT id, name, role, email, force_password_reset FROM users WHERE id = ?').get(req.user.id);
+    if (user) res.json(toCamel(user));
+    else res.status(404).json({ error: "Usuário não encontrado" });
+  } catch (e) {
+    res.status(500).json({ error: "Erro ao buscar usuário logado" });
+  }
 });
 
 app.get("/api/users", authenticateToken, async (req: any, res) => {
-  const rows = await db.prepare('SELECT id, name, role, email FROM users WHERE active = true').all();
-  res.json(rows);
+  try {
+    const rows = await db.prepare('SELECT id, name, role, email FROM users WHERE active = true').all();
+    res.json(rows);
+  } catch (e) {
+    res.status(500).json({ error: "Erro ao listar usuários" });
+  }
 });
 
 // Tickets
@@ -383,14 +438,17 @@ app.get("/api/tickets", authenticateToken, async (req: any, res) => {
     const rows = await db.prepare(q).all(...params);
     
     res.json(rows.map((r: any) => ({
-      id: r.id, ticketNumber: r.ticket_number, proposals: r.proposals ? JSON.parse(r.proposals) : [], bank: r.bank, 
+      id: r.id, ticketNumber: r.ticket_number, proposals: typeof r.proposals === 'string' ? JSON.parse(r.proposals) : (r.proposals || []), bank: r.bank, 
       importType: r.import_type, priority: r.priority, observation: r.observation, 
       status: r.status, requesterId: r.requester_id, assigneeId: r.assignee_id,
       createdAt: r.created_at, slaDeadline: r.sla_deadline, finishedAt: r.finished_at,
       requester: { id: r.requester_id, name: r.requester_name },
       assignee: r.assignee_id ? { id: r.assignee_id, name: r.assignee_name } : null
     })));
-  } catch (e: any) { console.error(e); res.status(500).send(); }
+  } catch (e: any) { 
+    console.error("[GET TICKETS ERROR]", e); 
+    res.status(500).json({ error: "Erro ao buscar a fila operacional" }); 
+  }
 });
 
 app.post("/api/tickets", authenticateToken, async (req: any, res) => {
@@ -441,7 +499,10 @@ app.post("/api/tickets", authenticateToken, async (req: any, res) => {
       }
     }
     res.json({ id: ticket.id, ticketNumber: ticket.ticket_number, createdAt: ticket.created_at, status: ticket.status });
-  } catch (e: any) { console.error(e); res.status(500).send(); }
+  } catch (e: any) { 
+    console.error("[POST TICKET ERROR]", e); 
+    res.status(500).json({ error: "Erro ao criar chamado" }); 
+  }
 });
 
 app.get("/api/tickets/:id/attachments", authenticateToken, async (req: any, res) => {
@@ -450,13 +511,13 @@ app.get("/api/tickets/:id/attachments", authenticateToken, async (req: any, res)
     res.json(rows.map((r: any) => ({
       id: r.id, originalName: r.original_name, extension: r.extension, size: r.size, uploadedAt: r.uploaded_at, user: { name: r.user_name }
     })));
-  } catch(e) { res.status(500).send(); }
+  } catch(e) { res.status(500).json({ error: "Erro ao carregar anexos" }); }
 });
 
 app.get("/api/attachments/:id/download", authenticateToken, async (req: any, res) => {
   try {
     const att = await db.prepare('SELECT * FROM attachments WHERE id = ?').get(req.params.id);
-    if (!att) return res.sendStatus(404);
+    if (!att) return res.status(404).json({ error: "Anexo não localizado" });
     
     if (att.file_data) {
       return res.json({ data: `data:${att.type};base64,${att.file_data}`, name: att.original_name, type: att.type });
@@ -466,15 +527,15 @@ app.get("/api/attachments/:id/download", authenticateToken, async (req: any, res
       const base64 = buffer.toString('base64');
       return res.json({ data: `data:${att.type};base64,${base64}`, name: att.original_name, type: att.type });
     }
-    res.status(404).send();
-  } catch(e) { console.error(e); res.status(500).send(); }
+    res.status(404).json({ error: "Arquivo corrompido ou indisponível" });
+  } catch(e) { console.error("[DOWNLOAD ERROR]", e); res.status(500).json({ error: "Erro ao baixar anexo" }); }
 });
 
 app.get("/api/tickets/:id", authenticateToken, async (req: any, res) => {
   try {
     const id = parseInt(req.params.id);
     const ticket = await db.prepare('SELECT * FROM tickets WHERE id = ?').get(id);
-    if (!ticket) return res.sendStatus(404);
+    if (!ticket) return res.status(404).json({ error: "Chamado não localizado" });
 
     const uRows = await db.prepare(`SELECT id, name FROM users WHERE id IN (?, ?)`).all(ticket.requester_id, ticket.assignee_id || -1);
     const reqU = uRows.find((u:any) => u.id === ticket.requester_id);
@@ -488,23 +549,23 @@ app.get("/api/tickets/:id", authenticateToken, async (req: any, res) => {
     }
 
     res.json({
-      id: ticket.id, ticketNumber: ticket.ticket_number, proposals: ticket.proposals ? JSON.parse(ticket.proposals) : [], bank: ticket.bank, importType: ticket.import_type, priority: ticket.priority, observation: ticket.observation, status: ticket.status, requesterId: ticket.requester_id, assigneeId: ticket.assignee_id, createdAt: ticket.created_at, slaDeadline: ticket.sla_deadline, finishedAt: ticket.finished_at,
+      id: ticket.id, ticketNumber: ticket.ticket_number, proposals: typeof ticket.proposals === 'string' ? JSON.parse(ticket.proposals) : (ticket.proposals || []), bank: ticket.bank, importType: ticket.import_type, priority: ticket.priority, observation: ticket.observation, status: ticket.status, requesterId: ticket.requester_id, assigneeId: ticket.assignee_id, createdAt: ticket.created_at, slaDeadline: ticket.sla_deadline, finishedAt: ticket.finished_at,
       requester: reqU,
       assignee: assU,
       historyDetails: hRows.map((h:any) => ({ id: h.id, action: h.action, timestamp: h.timestamp, user: { name: h.user_name } })),
       commentsDetails: cRows.map((c:any) => ({ id: c.id, text: c.text, timestamp: c.timestamp, user: { name: c.user_name } }))
     });
-  } catch(e) { res.status(500).send(); }
+  } catch(e) { console.error("[GET TICKET ERROR]", e); res.status(500).json({ error: "Erro ao visualizar chamado" }); }
 });
 
 app.put("/api/tickets/:id", authenticateToken, async (req: any, res) => {
-  if (req.user.role === 'SOLICITANTE') return res.sendStatus(403);
+  if (req.user.role === 'SOLICITANTE') return res.status(403).json({ error: "Acesso negado" });
   try {
     const id = parseInt(req.params.id);
     const { status, assigneeId, comment } = req.body;
     
     const ticket = await db.prepare('SELECT status, assignee_id FROM tickets WHERE id = ?').get(id);
-    if (!ticket) return res.sendStatus(404);
+    if (!ticket) return res.status(404).json({ error: "Chamado não localizado" });
 
     if (status && status !== ticket.status) {
       const sObj = await db.prepare('SELECT is_final FROM statuses WHERE name = ?').get(status);
@@ -522,18 +583,18 @@ app.put("/api/tickets/:id", authenticateToken, async (req: any, res) => {
        await db.prepare('INSERT INTO ticket_comments (ticket_id, text, user_id) VALUES (?, ?, ?)').run(id, comment, req.user.id);
     }
     res.json({ success: true });
-  } catch(e) { console.error(e); res.status(500).send(); }
+  } catch(e) { console.error("[PUT TICKET ERROR]", e); res.status(500).json({ error: "Erro ao atualizar chamado" }); }
 });
 
 app.delete("/api/tickets/:id", authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'ADMIN') return res.sendStatus(403);
+  if (req.user.role !== 'ADMIN') return res.status(403).json({ error: "Acesso negado" });
   try {
     const id = parseInt(req.params.id);
     const { reason } = req.body;
     await db.prepare('UPDATE tickets SET deleted = true, status = ?, deleted_at = CURRENT_TIMESTAMP, deleted_by = ?, delete_reason = ? WHERE id = ?').run('Excluído', req.user.id, reason, id);
     await db.prepare('INSERT INTO ticket_history (ticket_id, action, user_id) VALUES (?, ?, ?)').run(id, `Chamado excluído. Motivo: ${reason}`, req.user.id);
     res.json({ success: true });
-  } catch(e) { res.status(500).send(); }
+  } catch(e) { res.status(500).json({ error: "Erro ao excluir o chamado" }); }
 });
 
 // Dashboard
@@ -543,7 +604,7 @@ app.get("/api/dashboard", authenticateToken, async (req: any, res) => {
     let baseWhere = 'deleted = false';
     let params: any[] = [];
     if (startDate) { params.push(startDate); baseWhere += ` AND created_at >= ?`; }
-    if (endDate) { params.push(`${endDate} 23:59:59`); baseWhere += ` AND created_at <= ?`; }
+    if (endDate) { params.push(endDate); baseWhere += ` AND created_at <= ?`; }
     
     const rows = await db.prepare(`SELECT status, bank, priority, sla_deadline FROM tickets WHERE ${baseWhere}`).all(...params);
     
@@ -556,11 +617,14 @@ app.get("/api/dashboard", authenticateToken, async (req: any, res) => {
        byPriority: rows.reduce((acc:any, t:any) => { acc[t.priority] = (acc[t.priority] || 0) + 1; return acc; }, {})
     };
     res.json(stats);
-  } catch(e) { res.status(500).send(); }
+  } catch(e) { 
+    console.error("[DASHBOARD ERROR]", e); 
+    res.status(500).json({ error: "Erro ao carregar dados do dashboard" }); 
+  }
 });
 
 app.get("/api/analytics/insights", authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'ADMIN' && req.user.role !== 'GESTAO') return res.sendStatus(403);
+  if (req.user.role !== 'ADMIN' && req.user.role !== 'GESTAO') return res.status(403).json({ error: "Acesso restrito" });
   try {
     const tickets = await db.prepare(`SELECT t.status, t.bank, t.priority, t.import_type, t.created_at, t.finished_at, t.sla_deadline, u.name as assignee FROM tickets t LEFT JOIN users u ON t.assignee_id = u.id WHERE t.deleted = false`).all();
     
@@ -577,7 +641,7 @@ Gere um resumo executivo com insights operacionais, tendências, gargalos e prob
 Limite a 5 insights e 3 gargalos. Seja direto, profissional e baseie-se estritamente nos dados. Se houver poucos dados, avise no summary.`;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
+      model: "gemini-2.5-flash",
       contents: prompt,
       config: { responseMimeType: "application/json" }
     });
@@ -590,21 +654,21 @@ Limite a 5 insights e 3 gargalos. Seja direto, profissional e baseie-se estritam
     }
   } catch(e) {
     console.error("[IA Insights Error]", e);
-    res.status(500).json({ error: String(e) });
+    res.status(500).json({ error: "Erro interno ao contactar a LLM" });
   }
 });
 
 // Admin Users
 app.get("/api/admin/users", authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'ADMIN') return res.sendStatus(403);
+  if (req.user.role !== 'ADMIN') return res.status(403).json({ error: "Acesso restrito" });
   try {
     const rows = await db.prepare('SELECT id, name, login, email, role, sector, active, created_at as "createdAt", last_login as "lastLogin", force_password_reset as "forcePasswordReset" FROM users').all();
     res.json(rows.map((row: any) => ({ ...row, active: Boolean(row.active), forcePasswordReset: Boolean(row.forcePasswordReset) })));
-  } catch(e) { res.status(500).send(); }
+  } catch(e) { res.status(500).json({ error: "Erro ao buscar usuários" }); }
 });
 
 app.post("/api/admin/users", authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'ADMIN') return res.sendStatus(403);
+  if (req.user.role !== 'ADMIN') return res.status(403).json({ error: "Acesso restrito" });
   try {
     const { name, email, login, role, sector, password } = req.body;
     const pwd = hashPassword(password);
@@ -613,11 +677,11 @@ app.post("/api/admin/users", authenticateToken, async (req: any, res) => {
     ).run(name, email, login, role, sector, pwd);
     const user = await db.prepare('SELECT id, name, email, role, sector FROM users WHERE id = ?').get(result.lastInsertRowid);
     res.json(user);
-  } catch(e) { console.error(e); res.status(500).send(); }
+  } catch(e) { console.error("[CREATE USER ERROR]", e); res.status(500).json({ error: "Erro ao cadastrar usuário" }); }
 });
 
 app.put("/api/admin/users/:id", authenticateToken, async (req: any, res) => {
-  if (req.user.role !== 'ADMIN') return res.sendStatus(403);
+  if (req.user.role !== 'ADMIN') return res.status(403).json({ error: "Acesso restrito" });
   try {
     const id = parseInt(req.params.id);
     const { name, email, login, role, sector, active, password } = req.body;
@@ -627,7 +691,7 @@ app.put("/api/admin/users/:id", authenticateToken, async (req: any, res) => {
        await db.prepare('UPDATE users SET name=?, email=?, login=?, role=?, sector=?, active=? WHERE id=?').run(name, email, login, role, sector, active ? true : false, id);
     }
     res.json({ success: true });
-  } catch(e) { res.status(500).send(); }
+  } catch(e) { res.status(500).json({ error: "Erro ao atualizar usuário" }); }
 });
 
 app.post("/api/admin/users/:id/reset-password", authenticateToken, async (req: any, res) => {
@@ -636,7 +700,7 @@ app.post("/api/admin/users/:id/reset-password", authenticateToken, async (req: a
     const tempPassword = Math.random().toString(36).slice(-8);
     await db.prepare('UPDATE users SET password = ?, force_password_reset = true WHERE id = ?').run(hashPassword(tempPassword), req.params.id);
     res.json({ success: true, tempPassword });
-  } catch(e) { res.status(500).send(); }
+  } catch(e) { res.status(500).json({ error: "Erro ao redefinir a senha" }); }
 });
 
 app.get("/api/admin/logs", authenticateToken, async (req: any, res) => {
@@ -644,7 +708,7 @@ app.get("/api/admin/logs", authenticateToken, async (req: any, res) => {
   try {
     const rows = await db.prepare('SELECT * FROM login_logs ORDER BY timestamp DESC').all();
     res.json(rows.map(toCamel));
-  } catch(e) { res.status(500).send(); }
+  } catch(e) { res.status(500).json({ error: "Erro ao carregar logs" }); }
 });
 
 // External Params
@@ -661,16 +725,16 @@ app.get("/api/params/all", authenticateToken, async (req: any, res) => {
       priorities: prios.map(toCamel),
       statuses: stats.map(toCamel)
     });
-  } catch(e) { res.status(500).send(); }
+  } catch(e) { console.error("[GET PARAMS ERROR]", e); res.status(500).json({ error: "Erro ao buscar opções de formulários" }); }
 });
 
 const generateCrud = (pathPrefix: string, tableName: string) => {
   app.get(`/api/admin/${pathPrefix}`, authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'ADMIN') return res.sendStatus(403);
-    try { const rows = await db.prepare(`SELECT * FROM ${tableName} WHERE deleted = false`).all(); res.json(rows.map((row: any) => ({ ...toCamel(row), active: Boolean(row.active) }))); } catch(e) { res.status(500).send(); }
+    if (req.user.role !== 'ADMIN') return res.status(403).json({ error: "Acesso restrito" });
+    try { const rows = await db.prepare(`SELECT * FROM ${tableName} WHERE deleted = false`).all(); res.json(rows.map((row: any) => ({ ...toCamel(row), active: Boolean(row.active) }))); } catch(e) { res.status(500).json({ error: `Erro na leitura de ${tableName}` }); }
   });
   app.post(`/api/admin/${pathPrefix}`, authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'ADMIN') return res.sendStatus(403);
+    if (req.user.role !== 'ADMIN') return res.status(403).json({ error: "Acesso restrito" });
     try {
       let keys = Object.keys(req.body).filter(k => k !== 'id' && k !== 'createdAt' && k !== 'deleted');
       const qCols = keys.map(k => `"${k.replace(/[A-Z]/g, m => "_" + m.toLowerCase())}"`).join(', ');
@@ -680,10 +744,10 @@ const generateCrud = (pathPrefix: string, tableName: string) => {
       const result = await db.prepare(`INSERT INTO ${tableName} (${qCols}) VALUES (${qVals})`).run(...vals);
       const newRow = await db.prepare(`SELECT * FROM ${tableName} WHERE id = ?`).get(result.lastInsertRowid);
       res.json({ ...toCamel(newRow), active: Boolean((newRow as any).active) });
-    } catch(e) { console.error(e); res.status(500).send(); }
+    } catch(e) { console.error(e); res.status(500).json({ error: `Erro ao adicionar em ${tableName}` }); }
   });
   app.put(`/api/admin/${pathPrefix}/:id`, authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'ADMIN') return res.sendStatus(403);
+    if (req.user.role !== 'ADMIN') return res.status(403).json({ error: "Acesso restrito" });
     try {
       const keys = Object.keys(req.body).filter(k => k !== 'id' && k !== 'createdAt' && k !== 'deleted');
       const qSet = keys.map((k, i) => `"${k.replace(/[A-Z]/g, m => "_" + m.toLowerCase())}" = ?`).join(', ');
@@ -693,14 +757,14 @@ const generateCrud = (pathPrefix: string, tableName: string) => {
       await db.prepare(`UPDATE ${tableName} SET ${qSet} WHERE id = ?`).run(...vals);
       const updatedRow = await db.prepare(`SELECT * FROM ${tableName} WHERE id = ?`).get(req.params.id);
       res.json({ ...toCamel(updatedRow), active: Boolean((updatedRow as any).active) });
-    } catch(e) { console.error(e); res.status(500).send(); }
+    } catch(e) { console.error(e); res.status(500).json({ error: `Erro ao atualizar em ${tableName}` }); }
   });
   app.delete(`/api/admin/${pathPrefix}/:id`, authenticateToken, async (req: any, res) => {
-    if (req.user.role !== 'ADMIN') return res.sendStatus(403);
+    if (req.user.role !== 'ADMIN') return res.status(403).json({ error: "Acesso restrito" });
     try {
       await db.prepare(`UPDATE ${tableName} SET deleted = true WHERE id = ?`).run(req.params.id);
       res.json({ success: true });
-    } catch(e) { res.status(500).send(); }
+    } catch(e) { res.status(500).json({ error: `Erro ao excluir em ${tableName}` }); }
   });
 };
 
@@ -715,7 +779,9 @@ async function startServer() {
 
   app.use((err: any, req: any, res: any, next: any) => {
     console.error(`[ERRO CRÍTICO] Rota: ${req.url} - `, err.stack);
-    res.status(500).json({ error: "Erro interno no servidor." });
+    if (!res.headersSent) {
+      res.status(500).json({ error: "Erro interno no servidor." });
+    }
   });
 
   if (process.env.NODE_ENV !== "production") {
@@ -726,6 +792,9 @@ async function startServer() {
     app.use(express.static(distPath));
     app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
   }
-  app.listen(PORT, "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
+  
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`[SERVER READY] API online na porta ${PORT}`);
+  });
 }
 startServer();

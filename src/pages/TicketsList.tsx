@@ -22,6 +22,7 @@ export default function TicketsList() {
   const [filterAssignee, setFilterAssignee] = useState<string[]>([]);
   
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
 
   useEffect(() => {
@@ -30,6 +31,7 @@ export default function TicketsList() {
 
   const fetchData = async () => {
     setLoading(true);
+    setError(false);
     try {
       const [resTickets, resParams, resUsers] = await Promise.all([
          api.get('/tickets'),
@@ -41,8 +43,9 @@ export default function TicketsList() {
       setBanks(resParams.data.banks);
       setPriorities(resParams.data.priorities);
       setUsers(resUsers.data);
-    } catch (e) {
-      console.error(e);
+    } catch (e: any) {
+      console.error("[TICKETS] Falha na request:", e?.message || e);
+      setError(true);
     } finally {
       setLoading(false);
     }
@@ -278,6 +281,19 @@ export default function TicketsList() {
               <p className="text-sm font-medium text-[var(--color-ink-secondary)]">Carregando fila...</p>
             </div>
          </div>
+       ) : error ? (
+         <div className="flex-1 flex items-center justify-center">
+           <div className="flex flex-col items-center p-14 text-center rounded-2xl bg-white border border-gray-100 shadow-sm gap-4">
+              <FileQuestion className="w-12 h-12 text-red-500/80" />
+              <div className="space-y-1">
+                <h3 className="font-bold text-lg text-gray-900">Falha ao carregar a fila</h3>
+                <p className="text-gray-500 max-w-sm">Houve uma instabilidade ao conectar com o banco de dados. Tente atualizar a página.</p>
+              </div>
+              <button onClick={fetchData} className="btn-secondary py-2 px-4 shadow-sm text-sm mt-2 border border-gray-300">
+                 Tentar novamente
+              </button>
+           </div>
+         </div>
        ) : view === 'table' ? (
          <div className="glass-panel overflow-hidden flex-1 flex flex-col shadow-sm">
             <div className="overflow-x-auto flex-1">
@@ -316,10 +332,10 @@ export default function TicketsList() {
                              </td>
                              <td>
                                 <div className="flex gap-1.5 flex-wrap">
-                                   {t.proposals.slice(0, 2).map((p:string, i:number) => (
+                                   {(t.proposals || []).slice(0, 2).map((p:string, i:number) => (
                                       <span key={i} className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] px-2 py-0.5 rounded-md text-[11px] font-mono shadow-sm group-hover:bg-[var(--color-bg-card)] transition-colors">{p}</span>
                                    ))}
-                                   {t.proposals.length > 2 && <span className="text-[11px] font-bold text-[var(--color-ink-secondary)] self-center ml-1">+{t.proposals.length - 2}</span>}
+                                   {(t.proposals?.length || 0) > 2 && <span className="text-[11px] font-bold text-[var(--color-ink-secondary)] self-center ml-1">+{(t.proposals?.length || 0) - 2}</span>}
                                 </div>
                              </td>
                              <td>{getSlaBadge(t.slaDeadline)}</td>
@@ -406,7 +422,7 @@ export default function TicketsList() {
                                    <div className="font-bold text-sm tracking-tight text-[var(--color-ink-primary)] mb-1 outline-none">{t.bank}</div>
                                    <div className="text-[11px] font-medium text-[var(--color-ink-secondary)] italic mb-3">{t.importType}</div>
                                    <div className="flex gap-1.5 flex-wrap mb-4">
-                                      {t.proposals.slice(0, 3).map((p:string, i:number) => (
+                                      {(t.proposals || []).slice(0, 3).map((p:string, i:number) => (
                                          <span key={i} className="bg-[var(--color-bg-secondary)] border border-[var(--color-border)] px-1.5 py-0.5 rounded text-[10px] font-mono font-medium text-[var(--color-ink-secondary)]">{p}</span>
                                       ))}
                                    </div>
