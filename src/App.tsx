@@ -1,5 +1,6 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { SpeedInsights } from '@vercel/speed-insights/react';
 import { AuthProvider, useAuth } from './lib/AuthContext';
 import { ThemeProvider } from './lib/ThemeContext';
 import Layout from './components/Layout';
@@ -50,6 +51,7 @@ export default function App() {
                <Route path="ia" element={<AnalyticsIA />} />
             </Route>
           </Routes>
+          <SpeedInsights />
         </BrowserRouter>
       </AuthProvider>
     </ThemeProvider>
