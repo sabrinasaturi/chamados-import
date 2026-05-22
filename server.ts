@@ -1,6 +1,5 @@
 import express from "express";
 import path from "path";
-import { createServer as createViteServer } from "vite";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import cors from "cors";
@@ -774,17 +773,36 @@ generateCrud('priorities', 'priorities');
 generateCrud('statuses', 'statuses');
 
 // Root Express config
-async function startServer() {
-  await setupDatabase();
+let isDbSetup = false;
+let dbSetupPromise: Promise<void> | null = null;
 
-  app.use((err: any, req: any, res: any, next: any) => {
-    console.error(`[ERRO CRÍTICO] Rota: ${req.url} - `, err.stack);
-    if (!res.headersSent) {
-      res.status(500).json({ error: "Erro interno no servidor." });
+app.use(async (req, res, next) => {
+  if (req.url.startsWith('/api')) {
+    if (!isDbSetup) {
+      if (!dbSetupPromise) dbSetupPromise = setupDatabase();
+      await dbSetupPromise;
+      isDbSetup = true;
     }
-  });
+  }
+  next();
+});
+
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error(`[ERRO CRÍTICO] Rota: ${req.url} - `, err.stack);
+  if (!res.headersSent) {
+    res.status(500).json({ error: "Erro interno no servidor." });
+  }
+});
+
+async function startServer() {
+  if (!isDbSetup) {
+    if (!dbSetupPromise) dbSetupPromise = setupDatabase();
+    await dbSetupPromise;
+    isDbSetup = true;
+  }
 
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
   } else {
@@ -797,4 +815,13 @@ async function startServer() {
     console.log(`[SERVER READY] API online na porta ${PORT}`);
   });
 }
-startServer();
+
+if (process.env.VERCEL) {
+  // Em ambiente Serverless (Vercel), não iniciamos app.listen nem vite middleware.
+  // exportamos o app para que a Vercel o utilize como função.
+} else {
+  // Em ambiente local ou container convencional, subimos o servidor
+  startServer();
+}
+
+export default app;
