@@ -650,13 +650,15 @@ app.delete("/api/tickets/:id", authenticateToken, async (req: any, res) => {
 // Dashboard
 app.get("/api/dashboard", authenticateToken, async (req: any, res) => {
   try {
-    const { startDate, endDate } = req.query;
+    const { startDate, endDate, bank, importType } = req.query;
     let baseWhere = 'deleted = false';
     let params: any[] = [];
-    if (startDate) { params.push(startDate); baseWhere += ` AND created_at >= ?`; }
-    if (endDate) { params.push(endDate); baseWhere += ` AND created_at <= ?`; }
+    if (startDate) { params.push(startDate); baseWhere += ` AND created_at >= ?::timestamp`; }
+    if (endDate) { params.push(endDate); baseWhere += ` AND created_at <= ?::timestamp`; }
+    if (bank) { params.push(bank); baseWhere += ` AND bank = ?`; }
+    if (importType) { params.push(importType); baseWhere += ` AND import_type = ?`; }
     
-    const rows = await db.prepare(`SELECT status, bank, priority, sla_deadline FROM tickets WHERE ${baseWhere}`).all(...params);
+    const rows = await db.prepare(`SELECT status, bank, priority, sla_deadline, import_type, created_at, finished_at FROM tickets WHERE ${baseWhere}`).all(...params);
     const dbStatuses = await db.prepare('SELECT name, is_final, "order" FROM statuses WHERE deleted = false AND active = true ORDER BY "order" ASC').all();
     
     // Categorias dinamicamente baseadas nas statuses
@@ -681,19 +683,40 @@ app.get("/api/dashboard", authenticateToken, async (req: any, res) => {
 app.get("/api/analytics/insights", authenticateToken, async (req: any, res) => {
   if (req.user.role !== 'ADMIN' && req.user.role !== 'GESTAO') return res.status(403).json({ error: "Acesso restrito" });
   try {
-    const tickets = await db.prepare(`SELECT t.status, t.bank, t.priority, t.import_type, t.created_at, t.finished_at, t.sla_deadline, u.name as assignee FROM tickets t LEFT JOIN users u ON t.assignee_id = u.id WHERE t.deleted = false`).all();
+    const { startDate, endDate, bank, importType, status, priority, assignee } = req.query;
+    let baseWhere = 't.deleted = false';
+    let params: any[] = [];
+    if (startDate) { params.push(startDate); baseWhere += ` AND t.created_at >= ?::timestamp`; }
+    if (endDate) { params.push(endDate); baseWhere += ` AND t.created_at <= ?::timestamp`; }
+    if (bank) { params.push(bank); baseWhere += ` AND t.bank = ?`; }
+    if (importType) { params.push(importType); baseWhere += ` AND t.import_type = ?`; }
+    if (status) { params.push(status); baseWhere += ` AND t.status = ?`; }
+    if (priority) { params.push(priority); baseWhere += ` AND t.priority = ?`; }
+    if (assignee) { params.push(assignee); baseWhere += ` AND u.name = ?`; }
+
+    const tickets = await db.prepare(`SELECT t.status, t.bank, t.priority, t.import_type, t.created_at, t.finished_at, t.sla_deadline, u.name as assignee FROM tickets t LEFT JOIN users u ON t.assignee_id = u.id WHERE ${baseWhere}`).all(...params);
     
     const prompt = `Você é um analista de operações sênior do sistema ImportFlow C2. 
-Aqui estão os chamados do sistema em formato JSON:
+Aqui estão os chamados do sistema filtrados pelo usuário em formato JSON:
 ${JSON.stringify(tickets)}
 
-Gere um resumo executivo com insights operacionais, tendências, gargalos e problemas. Responda APENAS em formato JSON com o seguinte schema:
+Gere um relatório executivo com insights estratégicos e altamente analíticos com base DESSES dados filtrados.
+Considere na sua análise (quando existirem dados suficientes):
+- VOLUME OPERACIONAL: evolução, crescimento/redução, horários ou dias de pico.
+- SLA: percentual dentro do SLA x atrasado, ofensores, tempo de resolução e gargalos.
+- BANCOS: quem gera maior volume, reincidência, atrasos ou tem tendência de aumento.
+- TIPOS IMPORTAÇÃO: tipos mais críticos, tempo de resolução ou índices de problema.
+- OPERADORES: produtividade, sobrecarga, gargalo individual, ranking.
+- REINCIDÊNCIA: propostas, bancos e tipos mais recorrentes (principais causas).
+- PREVISÃO/ALERTAS: alertas sobre risco de SLA, banco instável ou aumento anormal de demanda.
+
+Responda APENAS em formato JSON, com o exato schema abaixo:
 {
-  "summary": "Resumo geral da saúde da operação.",
-  "insights": [ "Insight 1 sobre bancos", "Insight 2 sobre equipe", etc ],
-  "bottlenecks": [ "Gargalo 1 detectado", etc ]
+  "summary": "Texto em nível executivo resumindo de forma densa, destacando a saúde geral, tendências e o maior risco atual encontrado no filtro solicitado.",
+  "insights": [ "Insight profundo 1", "Insight profundo 2", ... ],
+  "bottlenecks": [ "Gargalo validado com dados 1", ... ]
 }
-Limite a 5 insights e 3 gargalos. Seja direto, profissional e baseie-se estritamente nos dados. Se houver poucos dados, avise no summary.`;
+Forneça no máximo 6 de insights e 4 de bottlenecks (gargalos). Use uma linguagem EXTREMAMENTE executiva, clara e orientada a decisão. Sem achismos, focando 100% apenas no output dos dados informados no JSON acima. Se não houver chamados no json, explique que não há volume no período/filtro informado.`;
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",

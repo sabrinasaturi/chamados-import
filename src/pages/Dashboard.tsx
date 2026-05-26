@@ -4,7 +4,7 @@ import { useAuth } from '../lib/AuthContext';
 import { useTheme } from '../lib/ThemeContext';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
-import { CheckCircle2, CircleDashed, AlertCircle, FileText, Calendar, ChevronDown } from 'lucide-react';
+import { CheckCircle2, CircleDashed, AlertCircle, FileText, Calendar, ChevronDown, Filter } from 'lucide-react';
 import { startOfDay, endOfDay, subDays, startOfMonth, format } from 'date-fns';
 
 type DatePreset = 'today' | '7days' | '30days' | 'thisMonth' | 'custom';
@@ -20,6 +20,19 @@ export default function Dashboard() {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  const [showGlobalFilters, setShowGlobalFilters] = useState(false);
+  
+  const [filterBank, setFilterBank] = useState('');
+  const [filterImportType, setFilterImportType] = useState('');
+  const [availableBanks, setAvailableBanks] = useState<any[]>([]);
+  const [availableImportTypes, setAvailableImportTypes] = useState<any[]>([]);
+
+  useEffect(() => {
+     api.get('/params/all').then(res => {
+         setAvailableBanks(res.data.banks || []);
+         setAvailableImportTypes(res.data.importTypes || []);
+     }).catch(console.error);
+  }, []);
 
   const dateRange = useMemo(() => {
     const today = new Date();
@@ -32,18 +45,20 @@ export default function Dashboard() {
         return { start: startOfDay(subDays(today, 30)).toISOString(), end: endOfDay(today).toISOString() };
       case 'thisMonth':
         return { start: startOfMonth(today).toISOString(), end: endOfDay(today).toISOString() };
-      case 'custom':
-        return { 
-           start: customStart ? startOfDay(new Date(customStart)).toISOString() : undefined,
-           end: customEnd ? endOfDay(new Date(customEnd)).toISOString() : undefined
-        };
+      case 'custom': {
+        if (!customStart && !customEnd) return undefined;
+        // avoid timezone shift from YYYY-MM-DD by appending T00:00:00
+        const s = customStart ? startOfDay(new Date(customStart + 'T00:00:00')).toISOString() : undefined;
+        const e = customEnd ? endOfDay(new Date(customEnd + 'T00:00:00')).toISOString() : undefined;
+        return { start: s, end: e };
+      }
     }
   }, [datePreset, customStart, customEnd]);
 
   useEffect(() => {
     if (datePreset === 'custom' && (!customStart || !customEnd)) return; // Wait for both dates if custom
     fetchStats();
-  }, [dateRange]);
+  }, [dateRange, filterBank, filterImportType]);
 
   const fetchStats = async () => {
     setLoading(true);
@@ -52,6 +67,8 @@ export default function Dashboard() {
       const params = new URLSearchParams();
       if (dateRange?.start) params.append('startDate', dateRange.start);
       if (dateRange?.end) params.append('endDate', dateRange.end);
+      if (filterBank) params.append('bank', filterBank);
+      if (filterImportType) params.append('importType', filterImportType);
       
       const res = await api.get(`/dashboard?${params.toString()}`);
       setStats(res.data);
@@ -109,9 +126,57 @@ export default function Dashboard() {
           <p className="text-[var(--color-ink-secondary)] text-sm">Resumo operacional das propostas no período</p>
         </div>
         
-        <div className="relative">
-           <button 
-             onClick={() => setShowFilterDropdown(!showFilterDropdown)}
+        <div className="flex items-center gap-3">
+          {/* Global Filters Dropdown */}
+          <div className="relative">
+             <button 
+               onClick={() => setShowGlobalFilters(!showGlobalFilters)}
+               className={`border px-4 py-2.5 rounded-lg text-sm font-semibold flex items-center justify-between shadow-sm hover:shadow-md transition-all gap-2
+                 ${(filterBank || filterImportType) ? 'bg-[var(--color-brand-wine)] text-white border-[var(--color-brand-wine)]' : 'bg-[var(--color-bg-card)] border-[var(--color-border)] text-[var(--color-ink-primary)]'}`}
+             >
+                <Filter className="w-4 h-4" />
+                Filtros {(filterBank || filterImportType) && '(Ativos)'}
+                <ChevronDown className="w-4 h-4 ml-1 opacity-80" />
+             </button>
+             <AnimatePresence>
+                {showGlobalFilters && (
+                   <motion.div 
+                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                      className="absolute right-0 top-full mt-2 w-72 bg-[var(--color-bg-card)] border border-[var(--color-border)] rounded-xl shadow-xl z-50 p-4 space-y-4"
+                   >
+                       <div>
+                          <label className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-ink-secondary)] mb-1 block">Banco</label>
+                          <select value={filterBank} onChange={e => setFilterBank(e.target.value)} className="input-field text-sm py-2 px-2 w-full bg-[var(--color-bg-secondary)]">
+                             <option value="">Todos os Bancos</option>
+                             {availableBanks.map(b => (
+                               <option key={b.id} value={b.name}>{b.name}</option>
+                             ))}
+                          </select>
+                       </div>
+                       <div>
+                          <label className="text-[10px] font-bold uppercase tracking-widest text-[var(--color-ink-secondary)] mb-1 block">Tipo de Importação</label>
+                          <select value={filterImportType} onChange={e => setFilterImportType(e.target.value)} className="input-field text-sm py-2 px-2 w-full bg-[var(--color-bg-secondary)]">
+                             <option value="">Todos os Tipos</option>
+                             {availableImportTypes.map(t => (
+                               <option key={t.id} value={t.name}>{t.name}</option>
+                             ))}
+                          </select>
+                       </div>
+                       { (filterBank || filterImportType) && (
+                         <button onClick={() => { setFilterBank(''); setFilterImportType(''); setShowGlobalFilters(false); }} className="w-full text-xs text-red-500 font-semibold py-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded">
+                           Limpar Filtros
+                         </button>
+                       )}
+                   </motion.div>
+                )}
+             </AnimatePresence>
+          </div>
+
+          <div className="relative">
+             <button 
+               onClick={() => setShowFilterDropdown(!showFilterDropdown)}
              className="bg-[var(--color-bg-card)] border border-[var(--color-border)] px-4 py-2.5 rounded-lg text-sm font-semibold text-[var(--color-ink-primary)] flex items-center justify-between min-w-[200px] shadow-sm hover:shadow-md transition-all"
            >
               <div className="flex items-center gap-2">
@@ -153,6 +218,7 @@ export default function Dashboard() {
               )}
            </AnimatePresence>
         </div>
+      </div>
       </div>
 
       {loading ? (
