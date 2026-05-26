@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import api from '../lib/api';
-import { Clock, Plus, Search, LayoutGrid, List, FileQuestion, Filter, X, Download } from 'lucide-react';
+import { Clock, Plus, Search, LayoutGrid, List, FileQuestion, Filter, X, Download, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, ArrowUpDown } from 'lucide-react';
 import { format, isPast, isBefore } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -12,18 +12,39 @@ export default function TicketsList() {
   const [users, setUsers] = useState<any[]>([]);
   const [priorities, setPriorities] = useState<any[]>([]);
   
-  const [view, setView] = useState<'kanban' | 'table'>('table');
-  const [search, setSearch] = useState('');
+  const [view, setView] = useState<'kanban' | 'table'>(() => (localStorage.getItem('c2_tickets_view') as any) || 'table');
+  const [search, setSearch] = useState(() => localStorage.getItem('c2_tickets_search') || '');
   
-  // Advanced Filters
-  const [filterPriority, setFilterPriority] = useState<string[]>([]);
-  const [filterBank, setFilterBank] = useState<string[]>([]);
-  const [filterStatus, setFilterStatus] = useState<string[]>([]);
-  const [filterAssignee, setFilterAssignee] = useState<string[]>([]);
+  // Advanced Filters (Persisted via localStorage)
+  const [filterPriority, setFilterPriority] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem('c2_tickets_priority') || '[]'); } catch { return []; }});
+  const [filterBank, setFilterBank] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem('c2_tickets_bank') || '[]'); } catch { return []; }});
+  const [filterStatus, setFilterStatus] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem('c2_tickets_status') || '[]'); } catch { return []; }});
+  const [filterAssignee, setFilterAssignee] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem('c2_tickets_assignee') || '[]'); } catch { return []; }});
+
+  // Pagination & Sorting (Persisted)
+  const [sortBy, setSortBy] = useState(() => localStorage.getItem('c2_tickets_sortBy') || 'createdAt');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>(() => (localStorage.getItem('c2_tickets_sortOrder') as any) || 'desc');
+  const [page, setPage] = useState(() => parseInt(localStorage.getItem('c2_tickets_page') || '1', 10));
+  const [itemsPerPage, setItemsPerPage] = useState(() => parseInt(localStorage.getItem('c2_tickets_itemsPerPage') || '25', 10));
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const [showFilters, setShowFilters] = useState(false);
+  const [showFilters, setShowFilters] = useState(() => localStorage.getItem('c2_tickets_showFilters') === 'true');
+
+  // Persist State to LocalStorage
+  useEffect(() => {
+    localStorage.setItem('c2_tickets_view', view);
+    localStorage.setItem('c2_tickets_search', search);
+    localStorage.setItem('c2_tickets_priority', JSON.stringify(filterPriority));
+    localStorage.setItem('c2_tickets_bank', JSON.stringify(filterBank));
+    localStorage.setItem('c2_tickets_status', JSON.stringify(filterStatus));
+    localStorage.setItem('c2_tickets_assignee', JSON.stringify(filterAssignee));
+    localStorage.setItem('c2_tickets_sortBy', sortBy);
+    localStorage.setItem('c2_tickets_sortOrder', sortOrder);
+    localStorage.setItem('c2_tickets_page', page.toString());
+    localStorage.setItem('c2_tickets_itemsPerPage', itemsPerPage.toString());
+    localStorage.setItem('c2_tickets_showFilters', showFilters ? 'true' : 'false');
+  }, [view, search, filterPriority, filterBank, filterStatus, filterAssignee, sortBy, sortOrder, page, itemsPerPage, showFilters]);
 
   useEffect(() => {
     fetchData();
@@ -111,7 +132,7 @@ export default function TicketsList() {
   };
 
   const filteredTickets = useMemo(() => {
-    return tickets.filter(t => {
+    let result = tickets.filter(t => {
       const matchSearch = search ? (
         t.ticketNumber.toLowerCase().includes(search.toLowerCase()) ||
         t.bank.toLowerCase().includes(search.toLowerCase()) ||
@@ -125,7 +146,51 @@ export default function TicketsList() {
 
       return matchSearch && matchPriority && matchBank && matchStatus && matchAssignee;
     });
-  }, [tickets, search, filterPriority, filterBank, filterStatus, filterAssignee]);
+
+    result.sort((a, b) => {
+      let valA = a[sortBy] || '';
+      let valB = b[sortBy] || '';
+      
+      if (sortBy === 'ticketNumber') {
+          valA = parseInt(valA.replace(/\D/g, '') || '0', 10);
+          valB = parseInt(valB.replace(/\D/g, '') || '0', 10);
+      }
+      if (sortBy === 'createdAt' || sortBy === 'slaDeadline') {
+         valA = new Date(valA).getTime();
+         valB = new Date(valB).getTime();
+      }
+      if (sortBy === 'assignee') {
+         valA = a.assignee?.name || '';
+         valB = b.assignee?.name || '';
+      }
+      
+      if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+      if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    return result;
+  }, [tickets, search, filterPriority, filterBank, filterStatus, filterAssignee, sortBy, sortOrder]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredTickets.length / itemsPerPage));
+  const currentTickets = view === 'table' ? filteredTickets.slice((page - 1) * itemsPerPage, page * itemsPerPage) : filteredTickets;
+  
+  useEffect(() => {
+     if (page > totalPages && totalPages > 0) setPage(totalPages);
+  }, [totalPages, page]);
+
+  const handleSort = (field: string) => {
+    if (sortBy === field) {
+       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+       setSortBy(field);
+       setSortOrder('asc');
+    }
+  };
+
+  const SortIcon = ({ field }: { field: string }) => {
+     return <ArrowUpDown className={`inline w-3 h-3 ml-1 ${sortBy === field ? 'text-[var(--color-brand-wine)]' : 'text-gray-300'}`} />;
+  };
 
   const clearFilters = () => {
     setFilterPriority([]);
@@ -298,21 +363,21 @@ export default function TicketsList() {
          <div className="glass-panel overflow-hidden flex-1 flex flex-col shadow-sm">
             <div className="overflow-x-auto flex-1">
                <table className="data-table">
-                  <thead className="sticky top-0 bg-[var(--color-bg-secondary)] z-10 shadow-sm">
+                  <thead className="sticky top-0 bg-[var(--color-bg-secondary)] z-10 shadow-sm cursor-pointer select-none">
                      <tr>
-                        <th>ID Chamado</th>
-                        <th>Prioridade</th>
-                        <th>Banco / Tipo</th>
+                        <th onClick={() => handleSort('ticketNumber')} className="hover:text-[var(--color-ink-primary)] transition-colors">ID Chamado <SortIcon field="ticketNumber" /></th>
+                        <th onClick={() => handleSort('priority')} className="hover:text-[var(--color-ink-primary)] transition-colors">Prioridade <SortIcon field="priority" /></th>
+                        <th onClick={() => handleSort('bank')} className="hover:text-[var(--color-ink-primary)] transition-colors">Banco / Tipo <SortIcon field="bank" /></th>
                         <th>Propostas</th>
-                        <th>SLA Vencimento</th>
+                        <th onClick={() => handleSort('slaDeadline')} className="hover:text-[var(--color-ink-primary)] transition-colors">SLA Vencimento <SortIcon field="slaDeadline" /></th>
                         <th className="w-24">Status SLA</th>
-                        <th>Fase Atual</th>
-                        <th>Responsável</th>
+                        <th onClick={() => handleSort('status')} className="hover:text-[var(--color-ink-primary)] transition-colors">Fase Atual <SortIcon field="status" /></th>
+                        <th onClick={() => handleSort('assignee')} className="hover:text-[var(--color-ink-primary)] transition-colors">Responsável <SortIcon field="assignee" /></th>
                      </tr>
                   </thead>
                   <tbody>
                      <AnimatePresence>
-                       {filteredTickets.map(t => (
+                       {currentTickets.map(t => (
                           <motion.tr 
                             initial={{ opacity: 0 }} 
                             animate={{ opacity: 1 }} 
@@ -373,6 +438,46 @@ export default function TicketsList() {
                   </tbody>
                </table>
             </div>
+
+            {/* Pagination Controls */}
+            {filteredTickets.length > 0 && (
+               <div className="bg-[var(--color-bg-secondary)] border-t border-[var(--color-border)] p-3 flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="flex items-center gap-2 text-sm text-[var(--color-ink-secondary)] font-medium">
+                     <span>Exibindo:</span>
+                     <select 
+                       value={itemsPerPage} 
+                       onChange={(e) => { setItemsPerPage(Number(e.target.value)); setPage(1); }}
+                       className="border border-[var(--color-border)] bg-[var(--color-bg-card)] rounded py-1 px-2 focus:ring-[var(--color-brand-wine)]"
+                     >
+                        <option value={10}>10</option>
+                        <option value={25}>25</option>
+                        <option value={50}>50</option>
+                        <option value={100}>100</option>
+                     </select>
+                     <span>de {filteredTickets.length} registros</span>
+                  </div>
+                  
+                  <div className="flex items-center gap-2">
+                     <button onClick={() => setPage(1)} disabled={page === 1} className="p-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg-card)] hover:bg-[var(--color-bg-secondary)] disabled:opacity-50 transition-colors">
+                        <ChevronsLeft className="w-4 h-4" />
+                     </button>
+                     <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page === 1} className="p-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg-card)] hover:bg-[var(--color-bg-secondary)] disabled:opacity-50 transition-colors">
+                        <ChevronLeft className="w-4 h-4" />
+                     </button>
+                     
+                     <span className="text-sm font-bold text-[var(--color-ink-primary)] px-2">
+                        Página {page} de {totalPages}
+                     </span>
+                     
+                     <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="p-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg-card)] hover:bg-[var(--color-bg-secondary)] disabled:opacity-50 transition-colors">
+                        <ChevronRight className="w-4 h-4" />
+                     </button>
+                     <button onClick={() => setPage(totalPages)} disabled={page === totalPages} className="p-1.5 rounded border border-[var(--color-border)] bg-[var(--color-bg-card)] hover:bg-[var(--color-bg-secondary)] disabled:opacity-50 transition-colors">
+                        <ChevronsRight className="w-4 h-4" />
+                     </button>
+                  </div>
+               </div>
+            )}
          </div>
        ) : (
          <div className="flex gap-4 flex-1 items-stretch min-h-0 overflow-x-auto pb-4 snap-x">
