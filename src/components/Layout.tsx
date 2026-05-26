@@ -35,11 +35,14 @@ export default function Layout() {
         animate={{ width: isSidebarOpen ? 260 : 80 }}
         className="relative z-20 flex flex-col bg-[var(--color-bg-card)] border-r border-[var(--color-border)] transition-colors"
       >
-        <div className="h-20 flex items-center justify-between px-6 border-b border-[var(--color-border)]">
+        <div 
+          className="flex items-center justify-between px-6 border-b border-[var(--color-border)]"
+          style={{ paddingLeft: '24px', marginTop: '0px', height: '200px' }}
+        >
           <AnimatePresence mode="wait">
             {isSidebarOpen ? (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col justify-center overflow-hidden">
-                <C2Logo className="h-10" />
+                <C2Logo className="object-contain" style={{ height: '150px', marginLeft: '30px', marginRight: '0px', paddingTop: '0px', paddingLeft: '0px', marginTop: '0px' }} />
               </motion.div>
             ) : (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex justify-center w-full">
@@ -53,12 +56,15 @@ export default function Layout() {
         
         <div className="p-4 flex-1 overflow-y-auto overflow-x-hidden">
           {isSidebarOpen && (
-            <div className="mb-3 text-[10px] font-bold text-[var(--color-ink-secondary)] uppercase tracking-widest px-2">
+            <div 
+              className="mb-3 text-[10px] font-bold text-[var(--color-ink-secondary)] uppercase tracking-widest px-2"
+              style={{ marginTop: '1px', paddingTop: '6px', borderStyle: 'dashed' }}
+            >
               Menu Principal
             </div>
           )}
           <nav className="space-y-1.5">
-            {navItems.filter(item => item.roles.includes(user?.role || '')).map((item) => {
+            {navItems.filter(item => item.roles.includes(user?.role || '')).map((item, index) => {
               const isActive = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path));
               const Icon = item.icon;
               return (
@@ -73,7 +79,7 @@ export default function Layout() {
                   }`}
                 >
                   <Icon className={`w-5 h-5 ${isSidebarOpen ? 'mr-3' : ''}`} strokeWidth={isActive ? 2.5 : 2} />
-                  {isSidebarOpen && <span>{item.name}</span>}
+                  {isSidebarOpen && <span style={index === 0 ? { fontFamily: 'Arial', backgroundColor: '#ffffff' } : {}}>{item.name}</span>}
                 </Link>
               );
             })}
