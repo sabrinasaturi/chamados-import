@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 const api = axios.create({
-  baseURL: '/api',
+  baseURL: import.meta.env.VITE_API_URL || '/api',
   timeout: 60000 // Timeout 60s request
 });
 
@@ -27,7 +27,8 @@ api.interceptors.response.use(
         const refreshToken = localStorage.getItem('refreshToken');
         if (!refreshToken) throw new Error('No refresh token');
         
-        const res = await axios.post('/api/refresh', { token: refreshToken });
+        const baseURL = import.meta.env.VITE_API_URL || '/api';
+        const res = await axios.post(`${baseURL}/refresh`, { token: refreshToken });
         const newToken = res.data.token;
         localStorage.setItem('token', newToken);
         
