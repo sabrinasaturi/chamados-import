@@ -346,6 +346,11 @@ async function setupDatabase() {
       await db.prepare('INSERT INTO users (name, email, login, role, sector, password, active, force_password_reset) VALUES (?, ?, ?, ?, ?, ?, true, false)')
         .run('Administrador', 'admin@c2.com', 'admin', 'ADMIN', 'Tecnologia', pwd);
       console.log("🌟 [BOOT INFO] Usuário Admin criado (admin/admin123).");
+    } else {
+      // Force reset admin password for safety during debug
+      const pwd = hashPassword('admin123');
+      await db.prepare("UPDATE users SET password = ? WHERE login = 'admin' OR email = 'admin@c2.com'").run(pwd);
+      console.log("🌟 [BOOT INFO] Senha do Admin redefinida para 'admin123'.");
     }
 
     const statusCount = await db.prepare('SELECT COUNT(*) as c FROM statuses').get();
@@ -394,7 +399,9 @@ app.post("/api/login", authLimiter, async (req, res) => {
 
     if (user) {
        console.log("[USER FOUND] User ID:", user.id, "Name:", user.name);
-       if (user.password === hashPassword(password)) {
+       const incomingHash = hashPassword(password);
+       const incomingHashTrimmed = hashPassword(password.trim());
+       if (user.password === incomingHash || user.password === incomingHashTrimmed) {
           console.log("[PASSWORD MATCH] Login success for user ID:", user.id);
           await db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(user.id);
           await db.prepare('INSERT INTO login_logs (user_id, name, ip, user_agent) VALUES (?, ?, ?, ?)').run(user.id, user.name, req.ip || 'Unknown', req.headers['user-agent'] || 'Unknown');
@@ -407,6 +414,7 @@ app.post("/api/login", authLimiter, async (req, res) => {
           res.json({ token, refreshToken, user: { id: user.id, name: user.name, role: user.role, email: user.email, forcePasswordReset: user.force_password_reset } });
        } else {
           console.log("[LOGIN ERROR] Password mismatch for user ID:", user.id);
+          console.log("[LOGIN ERROR DEBUG] DB Hash:", user.password, "Incoming Hash:", incomingHash, "Incoming Raw len:", password.length);
           res.status(401).json({ error: "Credenciais inválidas. Tente novamente." });
        }
     } else {
@@ -649,12 +657,17 @@ app.get("/api/dashboard", authenticateToken, async (req: any, res) => {
     if (endDate) { params.push(endDate); baseWhere += ` AND created_at <= ?`; }
     
     const rows = await db.prepare(`SELECT status, bank, priority, sla_deadline FROM tickets WHERE ${baseWhere}`).all(...params);
+    const dbStatuses = await db.prepare('SELECT name, is_final, "order" FROM statuses WHERE deleted = false AND active = true ORDER BY "order" ASC').all();
+    
+    // Categorias dinamicamente baseadas nas statuses
+    const abertosNames = dbStatuses.filter((s:any) => s.order === 1).map((s:any) => s.name);
+    const finalizadosNames = dbStatuses.filter((s:any) => s.is_final).map((s:any) => s.name);
     
     const stats = {
-       abertos: rows.filter((t:any) => t.status === 'Aberto').length,
-       emAndamento: rows.filter((t:any) => t.status === 'Em andamento' || t.status === 'Aguardando retorno banco').length,
-       finalizados: rows.filter((t:any) => t.status === 'Finalizado').length,
-       atrasados: rows.filter((t:any) => t.status !== 'Finalizado' && new Date(t.sla_deadline) < new Date()).length,
+       abertos: rows.filter((t:any) => abertosNames.includes(t.status)).length,
+       emAndamento: rows.filter((t:any) => !abertosNames.includes(t.status) && !finalizadosNames.includes(t.status)).length,
+       finalizados: rows.filter((t:any) => finalizadosNames.includes(t.status)).length,
+       atrasados: rows.filter((t:any) => !finalizadosNames.includes(t.status) && new Date(t.sla_deadline) < new Date()).length,
        byBank: rows.reduce((acc:any, t:any) => { acc[t.bank] = (acc[t.bank] || 0) + 1; return acc; }, {}),
        byPriority: rows.reduce((acc:any, t:any) => { acc[t.priority] = (acc[t.priority] || 0) + 1; return acc; }, {})
     };
