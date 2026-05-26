@@ -21,8 +21,13 @@ export default function Login() {
       const res = await api.post('/login', { email, password });
       login(res.data.token, res.data.refreshToken, res.data.user);
       navigate('/');
-    } catch (err) {
-      setError('Credenciais inválidas. Tente novamente.');
+    } catch (err: any) {
+      console.error("Login catch error:", err);
+      if (err.response && err.response.data && err.response.data.error) {
+         setError(err.response.data.error);
+      } else {
+         setError(err.message || 'Erro ao conectar com o servidor.');
+      }
       setIsLoading(false);
     }
   };
@@ -67,7 +72,7 @@ export default function Login() {
                     type="text" 
                     value={email}
                     onChange={e => setEmail(e.target.value)}
-                    className="input-field pl-11 py-2.5" 
+                    className="input-field pl-11 py-2.5 text-right" 
                     placeholder="E-mail ou Login Corporativo"
                     required 
                   />
@@ -84,7 +89,7 @@ export default function Login() {
                     type="password" 
                     value={password}
                     onChange={e => setPassword(e.target.value)}
-                    className="input-field pl-11 py-2.5" 
+                    className="input-field pl-11 py-2.5 text-right" 
                     placeholder="Senha de Acesso"
                     required 
                   />

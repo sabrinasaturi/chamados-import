@@ -14,9 +14,15 @@ import { Pool } from "pg";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 const SECRET_KEY = process.env.JWT_SECRET || "importflow-super-secret-c2";
 const REFRESH_SECRET = process.env.REFRESH_SECRET || "importflow-refresh-secret-c2";
+
+console.log("=========================================");
+console.log("[ENV TICK] INIT SERVER");
+console.log("[ENV] DATABASE_URL:", !!process.env.DATABASE_URL);
+console.log("[ENV] JWT_SECRET:", !!process.env.JWT_SECRET);
+console.log("=========================================");
 
 const hashPassword = (password: string) => crypto.createHash("sha256").update(password).digest("hex");
 
@@ -47,7 +53,7 @@ app.use(morgan('combined'));
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
   max: 200, 
-  message: "Muitas tentativas de login, por favor tente novamente mais tarde."
+  message: { error: "Muitas tentativas de login, por favor tente novamente mais tarde." }
 });
 
 const uploadDir = process.env.VERCEL ? path.join("/tmp", "uploads") : path.join(process.cwd(), "uploads");
@@ -373,28 +379,43 @@ app.use(async (req, res, next) => {
 
 // --- API Routes ---
 
+app.set('trust proxy', 1);
+
 app.post("/api/login", authLimiter, async (req, res) => {
   try {
+    console.log("[LOGIN START] Body:", req.body.email);
     const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: "Email e senha obrigatórios." });
+    if (!email || !password) {
+       console.log("[LOGIN ERROR] Email ou senha faltando");
+       return res.status(400).json({ error: "Email e senha obrigatórios." });
+    }
     
     const user = await db.prepare('SELECT * FROM users WHERE (email = ? OR login = ?) AND active = true').get(email, email);
 
-    if (user && user.password === hashPassword(password)) {
-      await db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(user.id);
-      await db.prepare('INSERT INTO login_logs (user_id, name, ip, user_agent) VALUES (?, ?, ?, ?)').run(user.id, user.name, req.ip, req.headers['user-agent']);
-      
-      const tokenUser = { id: user.id, role: user.role, name: user.name, forcePasswordReset: user.force_password_reset };
-      const token = jwt.sign(tokenUser, SECRET_KEY, { expiresIn: '12h' });
-      const refreshToken = jwt.sign({ id: user.id }, REFRESH_SECRET, { expiresIn: '7d' });
+    if (user) {
+       console.log("[USER FOUND] User ID:", user.id, "Name:", user.name);
+       if (user.password === hashPassword(password)) {
+          console.log("[PASSWORD MATCH] Login success for user ID:", user.id);
+          await db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(user.id);
+          await db.prepare('INSERT INTO login_logs (user_id, name, ip, user_agent) VALUES (?, ?, ?, ?)').run(user.id, user.name, req.ip || 'Unknown', req.headers['user-agent'] || 'Unknown');
+          
+          const tokenUser = { id: user.id, role: user.role, name: user.name, forcePasswordReset: user.force_password_reset };
+          const token = jwt.sign(tokenUser, SECRET_KEY, { expiresIn: '12h' });
+          const refreshToken = jwt.sign({ id: user.id }, REFRESH_SECRET, { expiresIn: '7d' });
 
-      res.json({ token, refreshToken, user: { id: user.id, name: user.name, role: user.role, email: user.email, forcePasswordReset: user.force_password_reset } });
+          console.log("[JWT GENERATED] Login Success");
+          res.json({ token, refreshToken, user: { id: user.id, name: user.name, role: user.role, email: user.email, forcePasswordReset: user.force_password_reset } });
+       } else {
+          console.log("[LOGIN ERROR] Password mismatch for user ID:", user.id);
+          res.status(401).json({ error: "Credenciais inválidas. Tente novamente." });
+       }
     } else {
-      res.status(401).json({ error: "Credenciais inválidas ou usuário inativo." });
+      console.log("[LOGIN ERROR] User not found or inactive for:", email);
+      res.status(401).json({ error: "Credenciais inválidas. Tente novamente." });
     }
   } catch (e: any) {
-    console.error("[LOGIN ERROR]", e);
-    res.status(500).json({ error: "Erro de servidor ao processar o login" });
+    console.error("[LOGIN ERROR] 500 falha interna:", e.message);
+    res.status(500).json({ error: "Erro interno: " + e.message });
   }
 });
 

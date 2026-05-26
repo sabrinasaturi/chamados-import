@@ -161,7 +161,7 @@ export default function TicketsList() {
                   placeholder="Buscar número, proposta..."
                   value={search}
                   onChange={e => setSearch(e.target.value)}
-                  className="input-field pl-9 py-2.5 text-sm w-full shadow-sm"
+                  className="input-field pl-9 py-2.5 text-sm w-full shadow-sm text-right"
                 />
              </div>
              
