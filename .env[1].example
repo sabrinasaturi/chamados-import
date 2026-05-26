@@ -1,0 +1,26 @@
+# Arquivo de Exemplo de Variáveis de Ambiente
+# Crie um arquivo '.env' baseado neste e preencha com os dados reais.
+
+# ----- BACKEND (Render) -----
+# Porta do servidor (padrão é 3000)
+PORT=3000
+
+# Chave secreta para assinar os tokens JWT (Use uma string longa e aleatória)
+JWT_SECRET=super_secret_jwt_key_importflow_c2
+
+# Variável para CORS: URL do frontend na Vercel (ex: https://importflow-frontend.vercel.app)
+VITE_APP_URL=*
+
+# String de Conexão do PostgreSQL (Supabase)
+# Exemplo: postgresql://postgres.xxxxxx:password@aws-0-sa-east-1.pooler.supabase.com:6543/postgres
+DATABASE_URL=
+
+# ----- SUPABASE STORAGE -----
+# Url da API e chave (Anon ou Service Role) fornecidos pelo painel do Supabase.
+# Lembre-se de criar o bucket público "attachments" no painel.
+SUPABASE_URL=
+SUPABASE_KEY=
+
+# ----- FRONTEND (Vercel / Vite) -----
+# URL da API de backend hospedada no Render
+VITE_API_URL=https://importflow-api.onrender.com/api
