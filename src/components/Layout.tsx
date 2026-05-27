@@ -6,6 +6,32 @@ import { Activity, LayoutDashboard, ListTodo, PlusCircle, LogOut, Search, Bell, 
 import { motion, AnimatePresence } from 'motion/react';
 import C2Logo from './C2Logo';
 
+function SidebarMenuItem({ 
+  item, 
+  isActive, 
+  isSidebarOpen 
+}: { 
+  item: any; 
+  isActive: boolean; 
+  isSidebarOpen: boolean; 
+}) {
+  const Icon = item.icon;
+  return (
+    <Link
+      to={item.path}
+      title={!isSidebarOpen ? item.name : undefined}
+      className={`flex items-center ${isSidebarOpen ? 'px-3' : 'justify-center'} py-2.5 rounded-lg text-sm font-medium transition-all ${
+        isActive 
+          ? 'bg-[var(--color-brand-wine)]/10 text-[var(--color-brand-wine)] shadow-[inset_3px_0_0_0_var(--color-brand-wine)]' 
+          : 'text-[var(--color-ink-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-ink-primary)]'
+      }`}
+    >
+      <Icon className={`w-5 h-5 ${isSidebarOpen ? 'mr-3' : ''}`} strokeWidth={isActive ? 2.5 : 2} />
+      {isSidebarOpen && <span>{item.name}</span>}
+    </Link>
+  );
+}
+
 export default function Layout() {
   const { user, logout } = useAuth();
   const { theme, toggleTheme } = useTheme();
@@ -37,12 +63,11 @@ export default function Layout() {
       >
         <div 
           className="flex items-center justify-between px-6 border-b border-[var(--color-border)]"
-          style={{ paddingLeft: '24px', marginTop: '0px', height: '200px' }}
         >
           <AnimatePresence mode="wait">
             {isSidebarOpen ? (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col justify-center overflow-hidden">
-                <C2Logo className="object-contain" style={{ height: '150px', marginLeft: '30px', marginRight: '0px', paddingTop: '0px', paddingLeft: '0px', marginTop: '0px' }} />
+                <C2Logo className="object-contain" />
               </motion.div>
             ) : (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex justify-center w-full">
@@ -58,7 +83,6 @@ export default function Layout() {
           {isSidebarOpen && (
             <div 
               className="mb-3 text-[10px] font-bold text-[var(--color-ink-secondary)] uppercase tracking-widest px-2"
-              style={{ marginTop: '1px', paddingTop: '6px', borderStyle: 'dashed' }}
             >
               Menu Principal
             </div>
@@ -66,21 +90,13 @@ export default function Layout() {
           <nav className="space-y-1.5">
             {navItems.filter(item => item.roles.includes(user?.role || '')).map((item, index) => {
               const isActive = location.pathname === item.path || (item.path !== '/' && location.pathname.startsWith(item.path));
-              const Icon = item.icon;
               return (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  title={!isSidebarOpen ? item.name : undefined}
-                  className={`flex items-center ${isSidebarOpen ? 'px-3' : 'justify-center'} py-2.5 rounded-lg text-sm font-medium transition-all ${
-                    isActive 
-                      ? 'bg-[var(--color-brand-wine)]/10 text-[var(--color-brand-wine)] shadow-[inset_3px_0_0_0_var(--color-brand-wine)]' 
-                      : 'text-[var(--color-ink-secondary)] hover:bg-[var(--color-bg-secondary)] hover:text-[var(--color-ink-primary)]'
-                  }`}
-                >
-                  <Icon className={`w-5 h-5 ${isSidebarOpen ? 'mr-3' : ''}`} strokeWidth={isActive ? 2.5 : 2} />
-                  {isSidebarOpen && <span style={index === 0 ? { fontFamily: 'Arial', backgroundColor: '#ffffff' } : {}}>{item.name}</span>}
-                </Link>
+                <SidebarMenuItem 
+                  key={item.path} 
+                  item={item} 
+                  isActive={isActive} 
+                  isSidebarOpen={isSidebarOpen} 
+                />
               );
             })}
           </nav>
